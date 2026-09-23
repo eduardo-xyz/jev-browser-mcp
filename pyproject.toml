@@ -1,0 +1,26 @@
+[project]
+name = "jev-browser-mcp"
+version = "0.1.0"
+description = "MCP tool exposing TypeSafe's Jev browser agent (via browser-use/jev-ultrafast) to Claude Code/Desktop."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast.git",
+    "mcp[cli]>=2.2,<3",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.4,<9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

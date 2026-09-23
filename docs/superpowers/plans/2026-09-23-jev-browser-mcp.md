@@ -53,9 +53,24 @@ dev = ["pytest>=8.4,<9"]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv]
+package = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 ```
+
+> **Note (added during execution):** `allow-direct-references = true` is required because
+> hatchling refuses a git-URL dependency by default. `[tool.uv] package = false` is required
+> because this project is a flat script (`server.py`, `summary.py`), not an installable
+> package with a `jev_browser_mcp/` directory — without it, hatchling's wheel builder can't
+> auto-detect what to ship and `uv sync` fails with "Unable to determine which files to ship
+> inside the wheel." Also requires `README.md` to already exist (hatchling validates the
+> `readme` field at build time even for an editable install) — Step 3 below was reordered
+> ahead of Task 4 for this reason; a placeholder is fine until Task 4 fills it in.
 
 - [ ] **Step 2: Write `.gitignore`**
 
