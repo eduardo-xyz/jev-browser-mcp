@@ -61,8 +61,14 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 ```
 
+> **Note (added during execution):** `pythonpath = ["."]` is also required — with a flat
+> `tests/` directory and no `conftest.py`, pytest's default import mode does not add the
+> project root to `sys.path`, so `tests/test_summary.py`'s `from summary import summarize`
+> fails with `ModuleNotFoundError` otherwise.
+>
 > **Note (added during execution):** `allow-direct-references = true` is required because
 > hatchling refuses a git-URL dependency by default. `[tool.uv] package = false` is required
 > because this project is a flat script (`server.py`, `summary.py`), not an installable
