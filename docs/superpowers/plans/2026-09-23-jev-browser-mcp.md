@@ -32,7 +32,7 @@
 **Interfaces:**
 - Produces: an installable `uv` project with `jev_ultrafast` and `mcp` importable from `.venv`. Later tasks run `uv run pytest` / `uv run python -c ...` against this environment.
 
-- [ ] **Step 1: Write `pyproject.toml`**
+- [x] **Step 1: Write `pyproject.toml`**
 
 ```toml
 [project]
@@ -78,7 +78,7 @@ pythonpath = ["."]
 > `readme` field at build time even for an editable install) — Step 3 below was reordered
 > ahead of Task 4 for this reason; a placeholder is fine until Task 4 fills it in.
 
-- [ ] **Step 2: Write `.gitignore`**
+- [x] **Step 2: Write `.gitignore`**
 
 ```
 .venv/
@@ -87,7 +87,7 @@ __pycache__/
 *.pyc
 ```
 
-- [ ] **Step 3: Write `.env.example`**
+- [x] **Step 3: Write `.env.example`**
 
 ```
 TYPESAFE_API_KEY=
@@ -99,7 +99,7 @@ TEXT_MODEL=inception/mercury-2.5
 TEXT_MODEL_REASONING=none
 ```
 
-- [ ] **Step 4: Resolve dependencies**
+- [x] **Step 4: Resolve dependencies**
 
 Run: `uv sync`
 Expected: completes without error; `.venv/` now contains both `jev_ultrafast` and `mcp` packages. Verify with:
@@ -107,7 +107,7 @@ Expected: completes without error; `.venv/` now contains both `jev_ultrafast` an
 Run: `uv run python -c "import jev_ultrafast, mcp; print('ok')"`
 Expected: prints `ok`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyproject.toml .gitignore .env.example uv.lock
@@ -128,7 +128,7 @@ git commit -m "Scaffold jev-browser-mcp project"
 
   `state` is shaped like a `jev_ultrafast.Agent.run()` yield (a snapshot dict): it has `status` (`"ready"|"predicted"|"done"|"blocked"`), `page` (dict with a `"url"` key), `elapsed_ms` (int), and `history` (list of step dicts, each with at least `action`, `kind`, `text`, `page_changed`, `elapsed_ms`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_summary.py`:
 
@@ -198,12 +198,12 @@ def test_summarize_keeps_done_status_even_if_cap_flag_is_true():
     assert result["status"] == "done"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_summary.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'summary'`
 
-- [ ] **Step 3: Write `summary.py`**
+- [x] **Step 3: Write `summary.py`**
 
 ```python
 """Trims a jev_ultrafast.Agent run into the shape browse_web returns to Claude."""
@@ -247,12 +247,12 @@ def summarize(state: dict, hit_step_cap: bool) -> BrowseResult:
     }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_summary.py -v`
 Expected: 3 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add summary.py tests/test_summary.py
@@ -278,7 +278,7 @@ git commit -m "Add pure step-summarization function for browse_web"
 - Calling `await mcp.call_tool(name, arguments_dict)` directly (no client/transport needed) is the right way to unit test a tool in-process: on success it returns a `CallToolResult` (`.is_error`, `.structured_content`, `.content`); on a `ToolError` raised inside the tool, `call_tool` re-raises `ToolError` (message prefixed `"Error executing tool <name>: ..."`) rather than swallowing it into an `is_error` result — that swallowing only happens at the outer JSON-RPC handler used when a real client calls the server. So tests should use `pytest.raises(ToolError)`, not check `.is_error`.
 - `await mcp.list_tools()` returns `Tool` objects with a `.input_schema` (snake_case) dict.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_server.py`:
 
@@ -324,12 +324,12 @@ def test_browse_web_reports_all_missing_keys_at_once(monkeypatch):
     assert "TEXT_MODEL_API_KEY" not in str(exc_info.value)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_server.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'server'`
 
-- [ ] **Step 3: Write `server.py`**
+- [x] **Step 3: Write `server.py`**
 
 ```python
 """MCP server exposing TypeSafe's Jev browser agent as a single browse_web tool."""
@@ -373,17 +373,17 @@ if __name__ == "__main__":
     mcp.run()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_server.py -v`
 Expected: 3 passed
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -v`
 Expected: 6 passed (3 from Task 2, 3 from this task)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server.py tests/test_server.py
@@ -401,7 +401,7 @@ git commit -m "Add browse_web MCP tool wrapping jev_ultrafast.Agent"
 - Consumes: nothing (documentation only).
 - Produces: nothing consumed by other tasks — this is the last task.
 
-- [ ] **Step 1: Write `README.md`**
+- [x] **Step 1: Write `README.md`**
 
 ```markdown
 # jev-browser-mcp
@@ -465,12 +465,12 @@ Opens the MCP inspector so you can call `browse_web` by hand before wiring it
 into Claude.
 ```
 
-- [ ] **Step 2: Verify the full test suite still passes**
+- [x] **Step 2: Verify the full test suite still passes**
 
 Run: `uv run pytest -v`
 Expected: 6 passed
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md
