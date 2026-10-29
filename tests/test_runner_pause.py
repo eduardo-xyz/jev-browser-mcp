@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from jev_mcp.config import Config
 from jev_mcp.runner import Runner
 from tests.fakes import FakeTarget, click, fill, page, scripted_choose
@@ -352,3 +354,31 @@ def test_confirm_transfer_label_without_params_pauses(cfg):
     t = FakeTarget([page(click("n9", "Confirm transfer"), url="any.site/x")])
     out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9"])).run()
     assert out["status"] == "paused_mismatch" and t.acted == []
+
+
+# --- fix round 3 ---
+
+def test_cancelled_during_confirmed_money_act_is_terminal(cfg):
+    import asyncio
+    t = RaiseOnce([page(click("n9", "Transferir")), page()], None)
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9", "DONE", "DONE"]))
+    r.run()
+    t.exc = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        r.resume(confirm=True)
+    assert (r.status, r.reason) == ("error", "money_action_uncertain") and r.pending is None
+    out = r.resume(confirm=True)
+    assert (out["status"], out["reason"]) == ("error", "money_action_uncertain")
+    assert t.attempts == 1 and t.acted == []
+
+
+def test_receipt_not_overwritten_by_later_done(tmp_path):
+    t = FakeTarget([page(click("n9", "Transferir"), text=MATCH),
+                    page(click("n1", "Saldo"), text="Referencia: 99887766"),
+                    page(text="Saldo 5 Referencia: 11112222")])
+    r = Runner("s", t, "pay", PAY, cfg_with_data(tmp_path),
+               choose=scripted_choose(["n9", "DONE", "n1", "DONE"]))
+    first = r.run()["receipt"]
+    assert first["reference"] == "99887766"
+    out = r.resume(instruction="check balance")
+    assert out["status"] == "done" and out["receipt"] == first

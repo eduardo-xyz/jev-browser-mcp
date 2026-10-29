@@ -24,7 +24,14 @@ class Target(Protocol):
 
     def fresh(self, page: dict) -> bool: ...
 
-    def act(self, action: dict, page: dict, text: str | None = None, verify: bool = False) -> None: ...
+    def act(self, action: dict, page: dict, text: str | None = None, verify: bool = False) -> None:
+        """Perform `action` on the screen.
+
+        StalePage may only be raised before any input is sent to the screen (verify check).
+        Any exception after input may have been sent is treated by the runner as an
+        uncertain action.
+        """
+        ...
 
     def screenshot(self, path: Path) -> Path: ...
 

@@ -267,7 +267,7 @@ class Runner:
     def _act_and_record(self, decision: dict, page: dict):
         choice = decision["choice"]
         if choice == "DONE":
-            if self.executed_money:
+            if self.executed_money and self.receipt is None:
                 self._save_receipt(page)
             raise _Stop("done")
         if choice == "BLOCKED":
@@ -303,9 +303,12 @@ class Runner:
             except StalePage:
                 self.money_attempted = before  # refused before tapping: nothing moved
                 raise
-            except Exception:  # noqa: BLE001 - outcome unknown: the money may have moved
+            except BaseException as e:  # outcome unknown: the money may have moved
                 self.pending, self._money_uncertain = None, True
-                raise _Stop("error", "money_action_uncertain")
+                self.status, self.reason = "error", "money_action_uncertain"
+                if not isinstance(e, Exception):
+                    raise  # cancellation/interrupt must propagate, but the session stays terminal
+                raise _Stop("error", "money_action_uncertain") from e
             self.executed_money = True
             self.pending = None  # tapped: a crash below must not leave a confirmable pending
         elif verify:
