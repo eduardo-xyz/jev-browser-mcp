@@ -61,6 +61,7 @@ Example `config.toml` (all keys optional):
 android_serial = "zdirl7t84pqwh6ww"
 android_mdns = "adb-zdirl7t84pqwh6ww"
 android_ip = "192.168.1.215"
+relay_python = "/usr/bin/python3"  # interpreter for the wireless relay helper (see below)
 money_apps = []     # app packages/names where contextual labels (Confirm, Send) are guarded
 own_accounts = []   # your own account numbers; transfers to these are recognised as own-account
 # money_labels and money_labels_contextual have built-in defaults and can be overridden here
@@ -69,14 +70,20 @@ own_accounts = []   # your own account numbers; transfers to these are recognise
 ### Android notes
 
 - **macOS Local Network / localhost relay:** the daemon reaches the phone over adb TCP through
-  a local relay on localhost. macOS may prompt for Local Network access (or block the
-  connection silently) -- allow it for your terminal / the process running `jevd` under
-  System Settings > Privacy & Security > Local Network.
+  a relay on 127.0.0.1. macOS Local Network privacy is enforced per binary and blocks both
+  `adb` and the uv-managed CPython ("No route to host"), so the relay runs as a separate
+  helper process (`jev_runner/relay_main.py`, stdlib only) under `relay_python`
+  (default `/usr/bin/python3`; Homebrew python also works). If wireless still fails, allow
+  that interpreter / your terminal under System Settings > Privacy & Security > Local Network.
 - **uiautomator2 first run:** it installs helper apps on the phone. On MIUI/HyperOS an
   install prompt appears on the device; approve it (and allow install via USB/adb) or the
   first run will stall.
 - **OS-level controls:** besides tapping in apps, Android tasks can press home, open recents
   and the notification shade, and launch an app by name.
+- **Apps by name:** the name is matched against the package name's dot-separated parts first
+  (`"BAC"` => `net.bac.sbe.android`), then against launcher labels when the device reports
+  them (many uiautomator2 builds don't). Apps whose package doesn't contain their name
+  (e.g. Gmail is `com.google.android.gm`) need the package name as `url_or_app`.
 
 ## Flows (learning)
 

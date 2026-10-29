@@ -18,6 +18,9 @@ class Config:
     android_ip: str | None = None
     adb_tcp_port: int = 5555
     relay_port: int = 5556
+    # Interpreter for the relay helper: must be one macOS Local Network privacy lets reach
+    # the LAN (system or Homebrew python; uv-managed CPython is blocked).
+    relay_python: str = "/usr/bin/python3"
     money_apps: list[str] = field(default_factory=list)  # opt-in via config.toml; nothing app-specific
     # Strong labels: guarded on any app/site, always.
     money_labels: list[str] = field(default_factory=lambda: [

@@ -2,93 +2,76 @@
 localhost TCP relay.
 
 Why the relay: macOS Local Network privacy blocks the `adb` binary from LAN hosts
-("No route to host") while Python processes are allowed, so adb talks to 127.0.0.1
-and this process forwards to the device.
+("No route to host"), so adb talks to 127.0.0.1 and a relay forwards to the device. The
+privacy check is per binary and also blocks the uv-managed CPython running jevd, so the
+relay runs as a helper process (`relay_main.py`) under `Config.relay_python`
+(default /usr/bin/python3), which macOS allows.
 """
-import socket
+import queue
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 from jev_runner.config import Config
 from jev_runner.targets.base import DeviceDisconnected
 
+RELAY_SCRIPT = str(Path(__file__).with_name("relay_main.py"))
 _SERVICES = ["_adb-tls-connect._tcp.local.", "_adb._tcp.local."]
+_TCPIP_SETTLE_S = 5.0  # adbd restarts after `adb tcpip`; wait this long for USB to return
+_RELAY_BUSY_EXIT = 2  # relay_main.py exit code when the port cannot be bound
 
 
-def _pipe(src: socket.socket, dst: socket.socket) -> None:
-    try:
-        while data := src.recv(65536):
-            dst.sendall(data)
-    except OSError:
-        pass
-    finally:
-        # closing one side closes the other
-        for s in (src, dst):
-            try:
-                s.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                s.close()
-            except OSError:
-                pass
+class RelayBusy(OSError):
+    pass
 
 
-class TcpRelay:
-    def __init__(self, local_port: int, host: str, port: int):
+class RelayProcess:
+    """Handle on a running relay_main.py helper: 127.0.0.1:local_port -> host:port."""
+
+    def __init__(self, proc, local_port: int, host: str, port: int):
+        self.proc = proc
         self.local_port = local_port
         self.host = host
         self.port = port
-        self._listener: socket.socket | None = None
-        self._lock = threading.Lock()
-        self._stopped = False
 
-    def start(self) -> None:
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("127.0.0.1", self.local_port))
-        srv.listen(16)
-        self._listener = srv
-        self._stopped = False
-        threading.Thread(target=self._accept_loop, args=(srv,), daemon=True).start()
-
-    def retarget(self, host: str) -> None:
-        with self._lock:
-            self.host = host
+    def alive(self) -> bool:
+        return self.proc.poll() is None
 
     def stop(self) -> None:
-        self._stopped = True
-        srv, self._listener = self._listener, None
-        if srv is not None:
-            try:
-                srv.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                srv.close()
-            except OSError:
-                pass
-
-    def _accept_loop(self, srv: socket.socket) -> None:
-        while not self._stopped:
-            try:
-                client, _ = srv.accept()
-            except OSError:
-                return
-            threading.Thread(target=self._handle, args=(client,), daemon=True).start()
-
-    def _handle(self, client: socket.socket) -> None:
-        with self._lock:
-            host = self.host
+        proc = self.proc
         try:
-            upstream = socket.create_connection((host, self.port), timeout=5)
-            upstream.settimeout(None)
+            if proc.stdin:
+                proc.stdin.close()
         except OSError:
-            client.close()
-            return
-        threading.Thread(target=_pipe, args=(client, upstream), daemon=True).start()
-        threading.Thread(target=_pipe, args=(upstream, client), daemon=True).start()
+            pass
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+
+
+def _read_line(stream, timeout: float) -> str | None:
+    """First line of `stream`, or None if nothing arrived within `timeout` seconds."""
+    q: queue.Queue = queue.Queue()
+
+    def reader():
+        try:
+            q.put(stream.readline())
+        except (OSError, ValueError):
+            q.put("")
+
+    threading.Thread(target=reader, daemon=True).start()
+    try:
+        return q.get(timeout=timeout)
+    except queue.Empty:
+        return None
 
 
 def resolve_ip(mdns_name: str, timeout: float = 3.0) -> str | None:
@@ -129,13 +112,15 @@ def resolve_ip(mdns_name: str, timeout: float = 3.0) -> str | None:
 
 class AdbLink:
     def __init__(self, cfg: Config, run=subprocess.run, resolve=resolve_ip,
-                 sleep=time.sleep, clock=time.monotonic):
+                 sleep=time.sleep, clock=time.monotonic, popen=subprocess.Popen):
         self.cfg = cfg
         self._run = run
+        self._popen = popen
         self._resolve = resolve
         self._sleep = sleep
         self._clock = clock
-        self.relay: TcpRelay | None = None
+        self.relay: RelayProcess | None = None
+        self.app_labels: dict[str, str] = {}  # package -> launcher label, per daemon
         self._tcpip_done = False
         self._relay_busy = False
         self.serial: str | None = None  # last serial reached; None after a failed connect
@@ -175,14 +160,51 @@ class AdbLink:
                 ip = None
         return ip or self.cfg.android_ip
 
-    def _ensure_relay(self, ip: str) -> None:
-        """Raises OSError if the relay port cannot be bound."""
-        if self.relay is None:
-            relay = TcpRelay(self.cfg.relay_port, ip, self.cfg.adb_tcp_port)
-            relay.start()
+    @property
+    def _wireless(self) -> str:
+        return f"127.0.0.1:{self.cfg.relay_port}"
+
+    def _stop_relay(self) -> None:
+        relay, self.relay = self.relay, None
+        if relay:
+            relay.stop()
+
+    def _start_relay(self, ip: str, deadline: float) -> None:
+        """Raises RelayBusy if the port cannot be bound, OSError on any other failure."""
+        argv = [self.cfg.relay_python, "-I", RELAY_SCRIPT,
+                str(self.cfg.relay_port), ip, str(self.cfg.adb_tcp_port)]
+        proc = self._popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        relay = RelayProcess(proc, self.cfg.relay_port, ip, self.cfg.adb_tcp_port)
+        line = _read_line(proc.stdout, self._timeout(deadline, 5.0))
+        if line is not None and line.strip() == "ready":
             self.relay = relay
-        elif self.relay.host != ip:
-            self.relay.retarget(ip)
+            return
+        if line == "":  # stdout closed: the helper exited (or is about to)
+            try:
+                code = proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                code = None
+            if code == _RELAY_BUSY_EXIT:
+                raise RelayBusy(f"relay port {self.cfg.relay_port} busy")
+        relay.stop()
+        raise OSError("relay helper did not become ready")
+
+    def _ensure_relay(self, ip: str, deadline: float) -> None:
+        """(Re)start the helper if missing, dead, or pointed at another host."""
+        if self.relay is not None and (not self.relay.alive() or self.relay.host != ip):
+            self._stop_relay()
+        if self.relay is None:
+            self._start_relay(ip, deadline)
+
+    def _wait_usb(self, usb: str, deadline: float) -> bool:
+        """After `adb tcpip`, adbd restarts: wait (bounded) for USB to be back as `device`."""
+        limit = min(deadline, self._clock() + _TCPIP_SETTLE_S)
+        while True:
+            self._sleep(0.5)
+            if self._device_states(deadline).get(usb) == "device":
+                return True
+            if self._clock() >= limit:
+                return False
 
     def _attempt(self, deadline: float) -> str | None:
         usb = self.cfg.android_serial
@@ -193,6 +215,8 @@ class AdbLink:
                     self._adb(deadline, "-s", usb, "tcpip", str(self.cfg.adb_tcp_port))
                 except (OSError, subprocess.SubprocessError):
                     pass
+                if not self._wait_usb(usb, deadline):
+                    return None
             return usb
         if self._expired(deadline):
             return None
@@ -200,15 +224,20 @@ class AdbLink:
         if not ip or self._expired(deadline):
             return None
         try:
-            self._ensure_relay(ip)
-        except OSError:
+            self._ensure_relay(ip, deadline)
+        except RelayBusy:
             self._relay_busy = True
+            return None
+        except OSError:
+            self._relay_busy = False
             return None
         self._relay_busy = False
         if self._expired(deadline):
             return None
-        wireless = f"127.0.0.1:{self.cfg.relay_port}"
+        wireless = self._wireless
         try:
+            # a stale "offline" entry from a dead relay hangs later adb commands
+            self._adb(deadline, "disconnect", wireless)
             self._adb(deadline, "connect", wireless)
         except (OSError, subprocess.SubprocessError):
             return None
@@ -232,6 +261,11 @@ class AdbLink:
             self._sleep(1)
 
     def close(self) -> None:
-        relay, self.relay = self.relay, None
-        if relay:
-            relay.stop()
+        had_relay = self.relay is not None
+        self._stop_relay()
+        if had_relay:
+            try:
+                self._run(["adb", "disconnect", self._wireless], capture_output=True,
+                          text=True, timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
