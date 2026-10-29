@@ -688,6 +688,36 @@ def test_reconnects_once_on_connection_error(fake_device, link):
 
 ---
 
+#### Task 7 addendum: Android OS-level control (user request, 2026-10-29)
+
+- `android_tree.parse_hierarchy(xml, package, activity, include_system_ui: bool = False)`:
+  when True, nodes from `com.android.systemui` are included like foreground
+  nodes. Also always append controls `{"id": "home", "kind": "home",
+  "label": "Go to the home screen"}`, `{"id": "recents", "kind": "recents",
+  "label": "Show recent apps"}`, `{"id": "notifications", "kind":
+  "notifications", "label": "Open the notification shade"}`.
+- `parse_hierarchy` returns `shade_open: bool` = systemui nodes cover more
+  than 40% of the screen area (union of their bounds vs root bounds).
+  `AndroidTarget.observe()` parses once; if `shade_open`, re-parses the same
+  XML with `include_system_ui=True` (no second dump).
+- `AndroidTarget.act`: `home` ⇒ `d.press("home")`; `recents` ⇒
+  `d.press("recent")`; `notifications` ⇒ `d.open_notification()`.
+- App by name: `AndroidTarget(link, app=...)` — a value containing a `.`
+  is a package; otherwise it is an app name resolved via
+  `resolve_app(d, name) -> str`: list launchable packages
+  (`d.shell("cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER")`),
+  read each label with `d.app_info(pkg)["label"]` (cached per target
+  instance), match `guards.normalize(label) == normalize(name)`, else a
+  unique prefix/substring match; zero or several matches ⇒
+  `TargetBlocked("app_not_found: <name>")` / `TargetBlocked("app_ambiguous: <names>")`.
+- Tests: controls present; `shade_open` true for a synthetic XML whose
+  systemui panel covers the screen and false for the BAC fixture
+  (status bar only); notification nodes visible only when shade open;
+  act dispatch for the three controls; `resolve_app` with a fake device
+  ("whatsapp" ⇒ `com.whatsapp`, ambiguous and missing cases).
+
+---
+
 ### Task 8: ChromeTarget with blank/hung tab handling
 
 **Files:**
