@@ -71,3 +71,50 @@ def test_device_disconnect_reports_error_keeps_runner(cfg):
     r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1"]))
     out = r.run()
     assert (out["status"], out["reason"]) == ("error", "device_disconnected")
+
+
+def test_secret_fill_is_masked_everywhere(cfg):
+    spy = []
+    t = FakeTarget([page(fill("n1", "Código BAC")), page(click("n2", "Ok")), page()])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1", "n2", "DONE"], spy),
+               field_text=lambda ctx: ("482913", {}))
+    out = r.run()
+    assert r.history[0]["text"] == "•••"
+    assert "482913" not in json.dumps(out)
+    assert all("482913" not in s for s in spy)
+    assert t.acted[0] == ("n1", "482913")
+
+
+def test_elapsed_excludes_idle_gap(cfg, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(runner_mod.time, "perf_counter", lambda: clock[0])
+    r = Runner("s", FakeTarget([page()]), "g", None, cfg, choose=scripted_choose(["DONE", "DONE"]))
+    r.run()
+    clock[0] += 1000
+    out = r.run()
+    assert out["elapsed_ms"] == 0
+
+
+def test_unexpected_exception_becomes_error(cfg):
+    def choose(page, goal, history):
+        raise RuntimeError("Model provider returned HTTP 401; no action executed.")
+
+    out = Runner("s", FakeTarget([page()]), "g", None, cfg, choose=choose).run()
+    assert out["status"] == "error" and "HTTP 401" in out["reason"]
+
+
+def test_stale_post_act_observe_does_not_retry_act(cfg):
+    from jev_mcp.targets.base import StalePage
+    t = FakeTarget([page(click("n1", "X")), page()])
+    calls = [0]
+    orig = t.observe
+
+    def observe():
+        calls[0] += 1
+        if calls[0] == 2:
+            raise StalePage()
+        return orig()
+
+    t.observe = observe
+    out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1", "DONE"])).run()
+    assert out["status"] == "done" and len(t.acted) == 1

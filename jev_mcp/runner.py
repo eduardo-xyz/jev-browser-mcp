@@ -5,7 +5,7 @@ from jev_ultrafast import model
 
 from . import result
 from .config import Config
-from .guards import scrub
+from .guards import is_secret_field, scrub
 from .targets.base import DeviceDisconnected, StalePage, Target, TargetBlocked
 
 UNREADABLE_TRIES = 3
@@ -26,7 +26,7 @@ def element_labels(page: dict) -> list[str]:
     return sorted(a["label"] for a in page.get("actions", []) if "node" in a)
 
 
-def history_entry(action: dict, page: dict, text: str | None) -> dict:
+def history_entry(action: dict, page: dict, text: str | None, secret_patterns: list[str] | None = None) -> dict:
     """Replay-ready record of one executed action (Task 5 fills value_source)."""
     if "node" in action:
         locator = {k: action.get(k) for k in ("kind", "resource_id", "label", "role")}
@@ -35,7 +35,7 @@ def history_entry(action: dict, page: dict, text: str | None) -> dict:
     return {
         "action": action["label"],
         "kind": action["kind"],
-        "text": text,
+        "text": "•••" if text is not None and is_secret_field(action, secret_patterns or []) else text,
         "page_changed": None,
         "where": page["url"],
         "signature": {"where": page["url"], "labels": element_labels(page)},
@@ -71,7 +71,10 @@ class Runner:
         self._stale = 0
 
     def run(self) -> dict:
+        if not self.status.startswith("paused"):
+            self.pending, self.receipt = None, None
         self.status, self.reason = "running", None
+        self._started = time.perf_counter()
         try:
             while self.status == "running":
                 self._tick()
@@ -83,7 +86,10 @@ class Runner:
             self.status, self.reason = "error", "device_disconnected"
         except StalePage:
             self.status, self.reason = "error", "stale_page"
-        self._touch()
+        except Exception as e:  # provider/target failures end the run, never escape
+            self.status, self.reason = "error", (str(e) or type(e).__name__)[:200]
+        finally:
+            self._touch()
         return result.build(self)
 
     def _touch(self):
@@ -102,7 +108,6 @@ class Runner:
         decision = self._decide(view)
         try:
             self._act_and_record(decision, page)
-            self._stale = 0
         except StalePage:
             self._stale += 1
             self.page = {}
@@ -144,13 +149,21 @@ class Runner:
             raise _Stop("error", "unknown_action")
         text = None
         if action["kind"] == "fill":
+            ctx = model.field_context(self.goal, action, scrub(page, self.secrets), self.history)
             try:
-                ctx = model.field_context(self.goal, action, scrub(page, self.secrets), self.history)
                 text, _ = self._field_text(ctx)
             except ValueError:
                 raise _Stop("blocked", "missing_value")
         self.target.act(action, page, text=text)
-        entry = history_entry(action, page, text)
+        # From here the action has executed: nothing below may trigger the pre-act retry path.
+        self._stale = 0
+        entry = history_entry(action, page, text, self.cfg.secret_patterns)
+        if text is not None and entry["text"] == "•••":
+            self.secrets.append(text)
         self.history.append(entry)
-        self.page = after = self.target.observe()
+        try:
+            self.page = after = self.target.observe()
+        except StalePage:
+            self.page = {}
+            return
         entry["page_changed"] = after.get("fingerprint") != page.get("fingerprint")
