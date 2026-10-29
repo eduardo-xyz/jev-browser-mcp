@@ -67,17 +67,13 @@ def parse_amount(s: str | int | float) -> Decimal | None:
     if isinstance(s, (int, float)):
         return Decimal(str(s)) if math.isfinite(s) else None
     s = re.sub(r"[^\d.,]", "", s)
-    if not re.search(r"\d", s):
+    # Only unambiguous shapes: plain digits, thousands groups of one separator, and an
+    # optional 2-digit decimal after the other separator. "150.5", ".5", "1.5000": None.
+    m = (re.fullmatch(r"(\d+|\d{1,3}(?:\.\d{3})+)(?:,(\d{2}))?", s)
+         or re.fullmatch(r"(\d+|\d{1,3}(?:,\d{3})+)(?:\.(\d{2}))?", s))
+    if not m:
         return None
-    if re.fullmatch(r"\d+[.,]\d", s):
-        return None  # "150.5": a decimal or a mistyped thousands group? ambiguous: fail closed
-    if "." in s and "," in s:
-        point = max(s.rfind("."), s.rfind(","))
-        s = re.sub(r"[.,]", "", s[:point]) + "." + re.sub(r"[.,]", "", s[point + 1:])
-    elif re.fullmatch(r"\d*[.,]\d{2}", s):
-        s = s.replace(",", ".")
-    else:
-        s = re.sub(r"[.,]", "", s)
+    s = re.sub(r"[.,]", "", m[1]) + (f".{m[2]}" if m[2] else "")
     try:
         return Decimal(s)
     except InvalidOperation:

@@ -165,3 +165,16 @@ def test_secret_field_checks_hint_and_resource_id_tail(cfg):
 def test_scrub_cleans_action_hint():
     out = scrub({"actions": [{"label": "x", "hint": "Clave 482913"}]}, ["482913"])
     assert out["actions"][0]["hint"] == "Clave •••"
+
+
+def test_malformed_amounts_fail_closed():
+    for s in [".5", ",5", ".50", "1.5000", "1,5000", "1.23.4", "12.34.567", "1.000,5",
+              "1,234.567", "1.234,56,78", "1.234,567", "1,000.000,00"]:
+        assert parse_amount(s) is None, s
+    assert not check_money("Monto ₡15.000 Destino ****4066",
+                           {"amount": "1.5000", "recipient": "4066"}).ok
+    # well-formed amounts still parse
+    assert parse_amount("150000") == Decimal("150000")
+    assert parse_amount("1.234.567") == parse_amount("1,234,567") == Decimal("1234567")
+    assert parse_amount("1,234.56") == parse_amount("1.234,56") == Decimal("1234.56")
+    assert parse_amount("₡ 150 000,00") == Decimal("150000.00")

@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; 281 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 283 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -105,11 +105,8 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
 ## Known residuals after final review (2026-10-29)
 
 Final whole-branch review + fix wave done (281 tests green). Open items, not yet fixed:
-- **Important:** `guards.parse_amount` still misreads malformed amounts instead of failing closed:
-  `".5"`/`",5"` → 5, `"1.5000"` → 15000. Fix: accept a separator only as grouped thousands
-  (`\d{1,3}([.,]\d{3})+`) or a 2-digit decimal; anything else → None.
-- `result.build` scrubs the whole result, so a `session_id`/flow name containing a secret's digit
-  run (≈1e-4 for a 4-digit PIN) gets mangled and can't be resumed. Fix: exclude `session_id` and `flow_*`.
+- Fixed 2026-10-29: `parse_amount` accepts only plain digits, single-separator thousands groups and an
+  optional 2-digit decimal (anything else → None); `result.build` no longer scrubs `session_id`/`flow_*`.
 - Minor: sticky secret detection over-triggers on apps reusing one EditText resource-id; history
   recorded before a value became secret isn't re-scrubbed; scalar config fields unvalidated;
   `Daemon.close` can wait ~30 s behind an in-flight reconnect.

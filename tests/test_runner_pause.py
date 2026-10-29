@@ -506,3 +506,19 @@ def test_same_screen_resume_requires_matching_locator(cfg):
     t._advance()
     out = r.resume(input="482913")
     assert out["status"] == "done" and t.acted[0] == ("n2", "482913")
+
+
+def test_result_build_keeps_session_id_and_flow_names_intact(cfg):
+    from types import SimpleNamespace
+    from jev_runner import result
+    t = FakeTarget([page()])
+    r = Runner("a1234b", t, "g", None, cfg, choose=scripted_choose(["DONE"]), learn=False)
+    r.secrets.append("1234")
+    r.flow = SimpleNamespace(name="pay-1234")
+    r.flow_saved = "pay-1234"
+    r.flow_updated = "pay-1234"
+    r.reason = "boom 1234"
+    out = result.build(r)
+    assert out["session_id"] == "a1234b"
+    assert out["flow_used"] == out["flow_saved"] == out["flow_updated"] == "pay-1234"
+    assert out["reason"] == "boom •••"
