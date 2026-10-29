@@ -40,3 +40,39 @@ def test_empty_webview_is_unreadable():
     xml = '<hierarchy><node package="net.bac.sbe.android" class="android.webkit.WebView" text="" content-desc="" clickable="true" enabled="true" bounds="[0,70][1600,2524]"/></hierarchy>'
     assert parse_hierarchy(xml, "net.bac.sbe.android", "Main")["readable"] is False
     assert parse_hierarchy("<hierarchy/>", "net.bac.sbe.android", "Main")["readable"] is False
+
+
+def _shade_xml(width=1000, height=2000):
+    return (
+        '<hierarchy>'
+        f'<node package="com.android.systemui" class="android.widget.FrameLayout" enabled="true" bounds="[0,0][{width},{height}]">'
+        '<node package="com.android.systemui" class="android.widget.Button" clickable="true" enabled="true"'
+        ' text="Wi-Fi" bounds="[10,100][400,300]"/></node>'
+        '<node package="com.app" class="android.widget.Button" clickable="true" enabled="true"'
+        ' text="Pay" bounds="[10,1500][400,1600]"/>'
+        '</hierarchy>'
+    )
+
+
+def test_system_controls_present():
+    ids = {a["id"]: a for a in page()["actions"]}
+    assert ids["home"]["kind"] == "home" and ids["home"]["label"] == "Go to the home screen"
+    assert ids["recents"]["kind"] == "recents" and ids["recents"]["label"] == "Show recent apps"
+    assert ids["notifications"]["kind"] == "notifications"
+    assert ids["notifications"]["label"] == "Open the notification shade"
+
+
+def test_shade_open_false_for_status_bar_only():
+    assert page()["shade_open"] is False
+
+
+def test_shade_open_true_when_systemui_covers_screen():
+    assert parse_hierarchy(_shade_xml(), "com.app", "Main")["shade_open"] is True
+
+
+def test_notification_nodes_only_when_shade_open():
+    xml = _shade_xml()
+    hidden = parse_hierarchy(xml, "com.app", "Main")
+    shown = parse_hierarchy(xml, "com.app", "Main", include_system_ui=True)
+    assert not any(a.get("label") == "Wi-Fi" for a in hidden["actions"])
+    assert any(a.get("label") == "Wi-Fi" for a in shown["actions"])

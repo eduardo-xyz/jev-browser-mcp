@@ -39,6 +39,7 @@ class _N:
     def __init__(self, el):
         a = el.attrib
         self.el = el
+        self.pkg = a.get("package", "")
         self.cls = a.get("class", "")
         self.rid = a.get("resource-id", "")
         self.text = _clean(a.get("text"))
@@ -79,17 +80,58 @@ def _desc_text(n):
     return " ".join(parts)
 
 
-def parse_hierarchy(xml: str, package: str, activity: str) -> dict:
+SYSTEMUI = "com.android.systemui"
+_SHADE_FRACTION = 0.4
+
+
+def _union_area(rects):
+    rects = [r for r in rects if r[2] > r[0] and r[3] > r[1]]
+    if not rects:
+        return 0
+    xs = sorted({v for r in rects for v in (r[0], r[2])})
+    area = 0
+    for x0, x1 in zip(xs, xs[1:]):
+        spans = sorted((r[1], r[3]) for r in rects if r[0] <= x0 and r[2] >= x1)
+        cur_end, covered = None, 0
+        start = None
+        for a, b in spans:
+            if cur_end is None or a > cur_end:
+                if cur_end is not None:
+                    covered += cur_end - start
+                start, cur_end = a, b
+            else:
+                cur_end = max(cur_end, b)
+        if cur_end is not None:
+            covered += cur_end - start
+        area += covered * (x1 - x0)
+    return area
+
+
+def _shade_open(nodes):
+    all_rects = [n.bounds for n in nodes if n.bounds[2] > n.bounds[0]]
+    if not all_rects:
+        return False
+    screen = max(r[2] for r in all_rects) * max(r[3] for r in all_rects)
+    if screen <= 0:
+        return False
+    sysui = [n.bounds for n in nodes if n.pkg == SYSTEMUI]
+    return _union_area(sysui) > _SHADE_FRACTION * screen
+
+
+def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bool = False) -> dict:
     url = f"{package}/{activity}"
     try:
         root = ET.fromstring(xml)
     except ET.ParseError:
         root = ET.Element("hierarchy")
     pkgs = {package} | SYSTEM_DIALOG_PACKAGES
+    if include_system_ui:
+        pkgs.add(SYSTEMUI)
     nodes: list[_N] = []
     for top in root.findall("node"):
         _walk(top, pkgs, nodes)
     inc = [n for n in nodes if n.included]
+    shade_open = _shade_open(nodes)
 
     # page text
     seen, lines = set(), []
@@ -151,6 +193,10 @@ def parse_hierarchy(xml: str, package: str, activity: str) -> dict:
 
     actions.append({"id": "back", "kind": "back", "label": "Go back"})
     actions.append({"id": "wait", "kind": "wait", "label": "Wait for the screen to update"})
+    actions.append({"id": "home", "kind": "home", "label": "Go to the home screen"})
+    actions.append({"id": "recents", "kind": "recents", "label": "Show recent apps"})
+    actions.append({"id": "notifications", "kind": "notifications",
+                    "label": "Open the notification shade"})
     if scroll:
         actions.append({"id": "scroll_down", "kind": "scroll", "label": "Scroll down", "delta": 1})
         actions.append({"id": "scroll_up", "kind": "scroll", "label": "Scroll up", "delta": -1})
@@ -167,4 +213,5 @@ def parse_hierarchy(xml: str, package: str, activity: str) -> dict:
         "actions": actions,
         "fingerprint": h.hexdigest(),
         "readable": readable,
+        "shade_open": shade_open,
     }
