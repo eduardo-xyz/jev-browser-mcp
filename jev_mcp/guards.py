@@ -38,19 +38,24 @@ def _host(url: str) -> str:
     return re.split(r"[/?#]", url.split("://", 1)[-1], maxsplit=1)[0]
 
 
+def _label_matches(label: str, labels: list[str]) -> bool:
+    return any(m and (label == m or label.startswith(m + " ")) for m in map(normalize, labels))
+
+
 def is_money_action(action: dict, page: dict, money_params: dict, cfg: Config) -> bool:
+    """Strong labels are guarded everywhere; contextual ones only in a money context."""
     if action.get("kind") != "click":
-        return False
-    host = _host(page.get("url") or "")
-    guarded = bool(money_params) or any(
-        host == app or host.endswith("." + app) for app in cfg.money_apps
-    )
-    if not guarded:
         return False
     label = normalize(action.get("label") or "")
     if set(label.split()) & {normalize(w) for w in cfg.money_exclude_words}:
         return False
-    return any(label == m or label.startswith(m + " ") for m in map(normalize, cfg.money_labels))
+    if _label_matches(label, cfg.money_labels):
+        return True
+    host = _host(page.get("url") or "")
+    in_context = bool(money_params) or any(
+        host == app or host.endswith("." + app) for app in cfg.money_apps
+    )
+    return in_context and _label_matches(label, cfg.money_labels_contextual)
 
 
 def parse_amount(s: str | int | float) -> Decimal | None:
@@ -133,13 +138,40 @@ def check_money(
     return MoneyCheck(ok=ok, expected=expected, seen=seen)
 
 
+def _secret_re(secret: str) -> re.Pattern:
+    """Digit edges must not touch other digits, so a short PIN never corrupts other numbers.
+
+    Non-digit edges stay unconstrained so "PIN1234" or a password inside text is still masked.
+    """
+    head = r"(?<!\d)" if secret[0].isdigit() else ""
+    tail = r"(?!\d)" if secret[-1].isdigit() else ""
+    return re.compile(head + re.escape(secret) + tail)
+
+
+def scrub_text(text: str, secrets: list[str]) -> str:
+    for s in secrets:
+        if s:
+            text = _secret_re(s).sub("•••", text)
+    return text
+
+
+def scrub_value(value, secrets: list[str]):
+    """Recursively scrub strings (and numbers) inside dicts/lists/tuples."""
+    if isinstance(value, dict):
+        return {k: scrub_value(v, secrets) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(scrub_value(v, secrets) for v in value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        s = str(value)
+        return "•••" if scrub_text(s, secrets) != s else value
+    if isinstance(value, str):
+        return scrub_text(value, secrets)
+    return value
+
+
 def scrub(page: dict, secrets: list[str]) -> dict:
     def clean(v):
-        if isinstance(v, str):
-            for s in secrets:
-                if s:
-                    v = v.replace(s, "•••")
-        return v
+        return scrub_text(v, secrets) if isinstance(v, str) else v
 
     out = dict(page)
     for key in ("url", "title", "text"):

@@ -1,4 +1,5 @@
 """Runner: per tick observe -> scrub -> decide -> act -> record."""
+import hashlib
 import re
 import time
 
@@ -6,12 +7,20 @@ from jev_ultrafast import model
 
 from . import result
 from .config import Config
-from .guards import check_money, is_money_action, is_secret_field, scrub
+from .guards import (
+    check_money,
+    is_money_action,
+    is_secret_field,
+    scrub,
+    scrub_text,
+    scrub_value,
+)
 from .targets.base import DeviceDisconnected, StalePage, Target, TargetBlocked
 
 UNREADABLE_TRIES = 3
 NO_PROGRESS = 3
 MONEY_KEYS = ("amount", "recipient")
+ESCAPABLE = ("pending_element_missing", "pending_element_ambiguous")
 REFERENCE_RE = re.compile(
     r"(?i)(referencia|comprobante|n[uú]mero de (transacci[oó]n|referencia)|reference)\D{0,20}(\d{4,})")
 
@@ -36,16 +45,15 @@ def locator_of(action: dict) -> dict:
     return {"control": action["id"]}
 
 
-def find_by_locator(page: dict, locator: dict) -> dict | None:
-    """resource_id when non-empty, else label+role+kind."""
+def find_by_locator(page: dict, locator: dict) -> list[dict]:
+    """All matches: resource_id when non-empty, else label+role+kind."""
     actions = page.get("actions", [])
     if "control" in locator:
-        return next((a for a in actions if a["id"] == locator["control"]), None)
+        return [a for a in actions if a["id"] == locator["control"]]
     if locator.get("resource_id"):
-        return next((a for a in actions if "node" in a
-                     and a.get("resource_id") == locator["resource_id"]), None)
-    return next((a for a in actions if "node" in a and all(
-        a.get(k) == locator.get(k) for k in ("label", "role", "kind"))), None)
+        return [a for a in actions if "node" in a and a.get("resource_id") == locator["resource_id"]]
+    return [a for a in actions if "node" in a and all(
+        a.get(k) == locator.get(k) for k in ("label", "role", "kind"))]
 
 
 def history_entry(action: dict, page: dict, text: str | None, secret_patterns: list[str] | None = None) -> dict:
@@ -102,7 +110,16 @@ class Runner:
         pending = self.pending
         if pending is None:
             return self.run()
-        if pending["type"] == "secret" and input is None:
+        if pending.get("attempted"):
+            # A money tap may have happened: never offer a second confirm.
+            self.pending = None
+            self.status, self.reason = "error", "money_action_uncertain"
+            return result.build(self)
+        if instruction and self.reason in ESCAPABLE:
+            # Escape hatch: the paused element is gone; let Jev re-plan (guards still apply).
+            self.pending = None
+            return self.run()
+        if pending["type"] == "secret" and not input:
             return result.build(self)
         if pending["type"] == "money" and not confirm:
             return result.build(self)
@@ -135,20 +152,35 @@ class Runner:
         status = "paused_needs_input" if pending["type"] == "secret" else "paused_mismatch"
         self.page = {}  # force a real re-observe: the screen may have moved while paused
         page = self._observe()
-        action = find_by_locator(page, pending["locator"])
-        if action is None:
+        same_screen = page.get("fingerprint") == pending["fingerprint"]
+        if same_screen:
+            found = [a for a in page.get("actions", []) if a["id"] == pending["action_id"]]
+        else:
+            found = find_by_locator(page, pending["locator"])
+        if pending["type"] == "money":
+            found = [a for a in found if a.get("label") == pending["label"]]
+        if not found:
             raise _Stop(status, "pending_element_missing")
+        if len(found) > 1:
+            raise _Stop(status, "pending_element_ambiguous")
+        action = found[0]
         if pending["type"] == "secret":
             self._execute(action, page, input, verify=True, secret=True)
             self.pending = None
             return
-        if page.get("fingerprint") != pending.get("fingerprint"):
+        if not (same_screen and self._text_hash(page) == pending["text_hash"]):
             # Screen changed since the human looked at it: their confirm no longer applies.
             self._guard_money(action, page, self._money_params())
             return
-        self._execute(action, page, None, verify=True)
-        self.executed_money = True
+        self._execute(action, page, None, verify=True, money=True)
         self.pending = None
+
+    def _text_hash(self, page: dict) -> str:
+        return hashlib.sha256(scrub_text(page.get("text") or "", self.secrets).encode()).hexdigest()
+
+    def _pending_for(self, kind: str, action: dict, page: dict, **extra) -> dict:
+        return {"type": kind, "locator": locator_of(action), "action_id": action["id"],
+                "label": action.get("label"), "fingerprint": page.get("fingerprint"), **extra}
 
     def _touch(self):
         self.last_used = time.time()
@@ -202,14 +234,16 @@ class Runner:
 
     def _guard_money(self, action: dict, page: dict, money_params: dict):
         """Tap autonomously only on an exact on-screen match; otherwise pause."""
-        check = check_money(page.get("text") or "", money_params, self.cfg.own_accounts)
+        text = scrub_text(page.get("text") or "", self.secrets)
+        check = check_money(text, money_params, self.cfg.own_accounts)
         if money_params and check.ok:
-            self._execute(action, page, None, verify=True)
-            self.executed_money = True
+            self._execute(action, page, None, verify=True, money=True)
+            self.pending = None
             return
-        self.pending = {"type": "money", "locator": locator_of(action),
-                        "fingerprint": page.get("fingerprint"),
-                        "expected": check.expected, "seen": check.seen}
+        self.pending = self._pending_for(
+            "money", action, page, text_hash=self._text_hash(page),
+            expected=scrub_value(check.expected, self.secrets),
+            seen=scrub_value(check.seen, self.secrets))
         raise _Stop("paused_mismatch")
 
     def _save_receipt(self, page: dict):
@@ -239,8 +273,7 @@ class Runner:
             raise _Stop("error", "unknown_action")
         if is_secret_field(action, self.cfg.secret_patterns):
             # Secrets never go to the text model: ask the human instead.
-            self.pending = {"type": "secret", "locator": locator_of(action),
-                            "field": action["label"]}
+            self.pending = self._pending_for("secret", action, page, field=action["label"])
             raise _Stop("paused_needs_input")
         money_params = self._money_params()
         if is_money_action(action, page, money_params, self.cfg):
@@ -256,10 +289,19 @@ class Runner:
         self._execute(action, page, text)
 
     def _execute(self, action: dict, page: dict, text: str | None, *,
-                 verify: bool = False, secret: bool = False):
+                 verify: bool = False, secret: bool = False, money: bool = False):
         if secret and text:
             self.secrets.append(text)  # before acting, so even a target error is scrubbed
-        if verify:
+        if money:
+            if self.pending is not None:
+                self.pending["attempted"] = True  # never re-tap after an unknown outcome
+            try:
+                self.target.act(action, page, text=text, verify=True)
+            except Exception:  # noqa: BLE001 - outcome unknown: the money may have moved
+                self.pending = None
+                raise _Stop("error", "money_action_uncertain")
+            self.executed_money = True
+        elif verify:
             self.target.act(action, page, text=text, verify=True)
         else:
             self.target.act(action, page, text=text)

@@ -38,7 +38,8 @@ def test_money_label_exact_after_normalization():
     click = lambda label: {"kind": "click", "label": label}
     assert is_money_action(click("TRANSFERIR"), page, {}, cfg)
     assert not is_money_action(click("Enviar código"), page, {}, cfg)
-    assert not is_money_action(click("Transferir"), {"url": "com.gohighlevel/x", "text": ""}, {}, cfg)
+    assert is_money_action(click("Transferir"), {"url": "com.gohighlevel/x", "text": ""}, {}, cfg)
+    assert not is_money_action(click("Confirmar"), {"url": "com.gohighlevel/x", "text": ""}, {}, cfg)
     assert is_money_action(click("Confirm"), {"url": "example.com/pay", "text": ""}, {"amount": 5}, cfg)
 
 
@@ -111,9 +112,27 @@ def test_scrub_title_url_and_no_actions_key():
     assert "482913" not in str(out) and "actions" not in out
 
 
-def test_no_app_guarded_by_default():
+def test_strong_labels_guarded_everywhere_contextual_only_in_context():
     cfg = Config()
     assert cfg.money_apps == []
-    page = {"url": "net.bac.sbe.android/x", "text": ""}
-    assert not is_money_action({"kind": "click", "label": "Transferir"}, page, {}, cfg)
-    assert is_money_action({"kind": "click", "label": "Transferir"}, page, {"amount": 5}, cfg)
+    anywhere = {"url": "example.org/x", "text": ""}
+    click = lambda label: {"kind": "click", "label": label}
+    for label in ["Transferir", "Pagar ahora", "Confirmar transferencia", "Send money", "Pay now"]:
+        assert is_money_action(click(label), anywhere, {}, cfg), label
+    for label in ["Send", "Confirmar", "Enviar", "Confirm"]:
+        assert not is_money_action(click(label), anywhere, {}, cfg), label
+        assert is_money_action(click(label), anywhere, {"amount": 5}, cfg), label
+        assert is_money_action(click(label), {"url": "bank.app/x"}, {},
+                               Config(money_apps=["bank.app"])), label
+    assert not is_money_action(click("Enviar código"), anywhere, {"amount": 5}, cfg)
+
+
+def test_scrub_respects_digit_boundaries():
+    out = scrub({"text": "PIN 1234 Monto 12345 x1234y PIN1234"}, ["1234"])
+    assert out["text"] == "PIN ••• Monto 12345 x•••y PIN•••"
+
+
+def test_scrub_value_recurses():
+    from jev_mcp.guards import scrub_value
+    v = {"a": ["482913", ("x 482913",)], "b": 482913, "c": "4829130"}
+    assert scrub_value(v, ["482913"]) == {"a": ["•••", ("x •••",)], "b": "•••", "c": "4829130"}

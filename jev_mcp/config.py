@@ -19,9 +19,14 @@ class Config:
     adb_tcp_port: int = 5555
     relay_port: int = 5556
     money_apps: list[str] = field(default_factory=list)  # opt-in via config.toml; nothing app-specific
+    # Strong labels: guarded on any app/site, always.
     money_labels: list[str] = field(default_factory=lambda: [
-        "Transferir", "Pagar", "Confirmar", "Confirmar pago", "Enviar",
-        "Pay", "Send", "Transfer", "Confirm",
+        "Transferir", "Pagar", "Pagar ahora", "Confirmar pago", "Confirmar transferencia",
+        "Pay", "Pay now", "Transfer", "Send money",
+    ])
+    # Contextual labels: guarded only with money params or on a configured money app.
+    money_labels_contextual: list[str] = field(default_factory=lambda: [
+        "Confirmar", "Enviar", "Send", "Confirm",
     ])
     secret_patterns: list[str] = field(default_factory=lambda: [
         "codigo", "code", "otp", "token", "pin", "clave",

@@ -125,7 +125,7 @@ def test_instruction_appended_to_goal(cfg):
     t = FakeTarget([page(fill("n1", "OTP")), page()])
     r = Runner("s", t, "g", None, cfg, choose=choose)
     r.run()
-    r.resume(input="1", instruction="use the savings account")
+    r.resume(input="482913", instruction="use the savings account")
     assert goals[-1] == "g\nuse the savings account"
 
 
@@ -146,3 +146,114 @@ def test_target_error_during_secret_fill_never_leaks_value(cfg):
     out = r.resume(input="482913")
     assert out["status"] == "error" and "482913" not in json.dumps(out)
     assert r.pending["type"] == "secret"  # still resumable after the failure
+
+
+# --- fix round 1 ---
+
+def test_default_config_strong_label_without_params_pauses(cfg):
+    t = FakeTarget([page(click("n9", "Transferir"), url="some.app/x")])
+    out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9"])).run()
+    assert out["status"] == "paused_mismatch" and t.acted == []
+
+
+def test_default_config_contextual_label_unconfigured_host_is_not_money(cfg):
+    t = FakeTarget([page(click("n9", "Send"), url="chat.example/x"), page()])
+    out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9", "DONE"])).run()
+    assert out["status"] == "done" and t.acted == [("n9", None)] and t.verified == []
+
+
+PAY = {"amount": 150000, "recipient": "CR05015202001026284066"}
+
+
+def test_confirm_refused_when_only_text_changed(cfg):
+    confirm = page(click("n9", "Transferir"), text="Destino ****1234 Monto ₡150.000,00")
+    t = FakeTarget([confirm, page()])
+    r = Runner("s", t, "pay", PAY, cfg, choose=scripted_choose(["n9", "DONE"]))
+    r.run()
+    confirm["text"] = "****9999 Monto 999.000"  # Android fingerprint ignores text
+    r.page = {}
+    out = r.resume(confirm=True)
+    assert out["status"] == "paused_mismatch" and t.acted == []
+    assert "9999" in json.dumps(out["seen"])
+
+
+def test_typed_secret_never_leaks_via_expected_or_seen(cfg):
+    t = FakeTarget([page(fill("n1", "OTP")),
+                    page(click("n2", "Transferir"),
+                         text="Código 482913 aceptado Destino ****4066 Monto ₡1,00")])
+    r = Runner("s", t, "pay", PAY, cfg, choose=scripted_choose(["n1", "n2"]))
+    r.run()
+    out = r.resume(input="482913")
+    assert out["status"] == "paused_mismatch"
+    assert "482913" not in json.dumps(out) and "482913" not in json.dumps(r.pending)
+
+
+def test_confirm_taps_the_exact_element_jev_chose(cfg):
+    t = FakeTarget([page(click("n1", "Pagar"), click("n2", "Pagar")), page()])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n2", "DONE"]))
+    assert r.run()["status"] == "paused_mismatch"
+    assert r.resume(confirm=True)["status"] == "done" and t.acted == [("n2", None)]
+
+
+def test_confirm_on_changed_screen_with_two_matches_stays_paused(cfg):
+    t = FakeTarget([page(click("n1", "Pagar"), click("n2", "Pagar")),
+                    page(click("n5", "Pagar"), click("n6", "Pagar"))])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n2"]))
+    r.run()
+    t._advance()
+    r.page = {}
+    out = r.resume(confirm=True)
+    assert (out["status"], out["reason"]) == ("paused_mismatch", "pending_element_ambiguous")
+    assert t.acted == []
+
+
+def test_money_pending_requires_same_label(cfg):
+    a = {**click("n9", "Transferir"), "resource_id": "btn_main"}
+    b = {**click("n3", "Cancelar"), "resource_id": "btn_main"}
+    t = FakeTarget([page(a), page(b)])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9"]))
+    r.run()
+    t._advance()
+    r.page = {}
+    out = r.resume(confirm=True)
+    assert out["reason"] == "pending_element_missing" and t.acted == []
+
+
+def test_failed_confirmed_money_act_is_uncertain_and_not_retryable(cfg):
+    t = FakeTarget([page(click("n9", "Transferir"))])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9"]))
+    r.run()
+    t.raise_on_act = RuntimeError("tap verification failed")
+    out = r.resume(confirm=True)
+    assert (out["status"], out["reason"]) == ("error", "money_action_uncertain")
+    assert r.pending is None
+    t.raise_on_act = None
+    r.resume(confirm=True)
+    assert t.acted == []  # a second confirm can never re-tap
+
+
+def test_failed_autonomous_money_act_is_uncertain(cfg):
+    confirm = page(click("n9", "Transferir"), text="Destino ****4066 Monto ₡150.000,00")
+    t = FakeTarget([confirm], raise_on_act=RuntimeError("boom"))
+    out = Runner("s", t, "pay", PAY, cfg, choose=scripted_choose(["n9"])).run()
+    assert (out["status"], out["reason"]) == ("error", "money_action_uncertain")
+
+
+def test_instruction_escapes_missing_pending_element(cfg):
+    a = {**fill("n1", "OTP"), "resource_id": "otp"}
+    t = FakeTarget([page(a), page(click("n2", "Volver")), page()])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1", "n2", "DONE"]))
+    r.run()
+    t._advance()
+    r.page = {}
+    assert r.resume(input="482913")["reason"] == "pending_element_missing"
+    out = r.resume(instruction="start over from the menu")
+    assert out["status"] == "done" and r.pending is None
+    assert r.goal.endswith("\nstart over from the menu")
+
+
+def test_empty_input_treated_as_missing(cfg):
+    t = FakeTarget([page(fill("n1", "PIN")), page()])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1", "DONE"]))
+    r.run()
+    assert r.resume(input="")["status"] == "paused_needs_input" and t.acted == []
