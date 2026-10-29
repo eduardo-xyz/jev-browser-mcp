@@ -356,6 +356,36 @@ performed, nothing tapped).
 - Tablet LAN ping 110–180 ms (likely Wi-Fi power saving); worth checking
   the Redmi's Wi-Fi power settings for speed.
 
+### Verification results (2026-10-29)
+
+On-device run on the Redmi Pad (BAC login screen only; no login fields
+touched; no real TypeSafe key, so Jev decisions are unverified).
+
+- **USB path:** `AdbLink.ensure_connected()` returned `zdirl7t84pqwh6ww`.
+- **Wireless relay path (no `android_serial`):** returned `127.0.0.1:5556`
+  in 6.7 s, but only from a Homebrew Python. The uv-managed CPython
+  (`~/.local/share/uv/python/cpython-3.14.6`) gets `No route to host` to
+  the LAN (macOS Local Network privacy is per binary), so the relay's
+  upstream connect fails and `adb` shows `127.0.0.1:5556 offline`
+  (30 s timeout).
+- **observe() latency, BAC login, 5 calls:** wireless 1461/900/861/814/1044 ms
+  (an earlier cold run: 2547/2277/1445/1559/1079); USB 517/606/524/1111/1091 ms.
+  `btnLogin` is a `button` labeled `Ingresar`.
+- **OS controls:** `act home` returned to `com.miui.home`.
+- **Not working:** app-by-name (`app="BAC"`, `"Gmail"`) fails with
+  `app_not_found` because `uiautomator2` `app_info()` returns no `label`
+  on this device (only versionName/versionCode); resolution took 41 s.
+- **Not working:** `Tipo de Cambio` is not a clickable node (text and image
+  nodes with `clickable="false"`, no clickable ancestor in the parsed
+  actions), so the hand-written flow cannot locate it; the run fell
+  through to Jev and ended `error`, `HTTP 401`, `flow_used`
+  `bac-tipo-cambio`, no tablet action.
+- **Flaky:** the first USB attach issues `adb tcpip 5555`, restarting adbd;
+  an immediate `uiautomator2` connect then fails with `AdbError: closed`
+  (retry succeeds).
+- **Unverified (no keys):** real Jev decisions, Chrome/GHL goal, Android
+  non-money goal, money flows, receipts.
+
 ## My calls (Claude's, open to change)
 
 - Separate long-lived `jevd` daemon + thin MCP front end.
