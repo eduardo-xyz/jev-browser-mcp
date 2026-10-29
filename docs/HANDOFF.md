@@ -94,7 +94,12 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
 - Tablet: Redmi Pad, model 2505DRP06G, Android 16 / HyperOS 3.0, serial `zdirl7t84pqwh6ww`,
   LAN `192.168.1.215`, mDNS instance `adb-zdirl7t84pqwh6ww-…` (`_adb-tls-connect._tcp`).
 - `adb` itself is also blocked from the LAN by macOS → always connect through `127.0.0.1:5556` relay.
-- No `TYPESAFE_API_KEY` yet → real Jev decisions are untested end to end; say so when reporting.
+- Keys are in `.env` (git-ignored): TypeSafe + DeepSeek as text model (`TEXT_MODEL_BASE_URL=https://api.deepseek.com/v1`,
+  `TEXT_MODEL=deepseek-chat`, no `TEXT_MODEL_REASONING`). OpenAI's API is not usable directly: `jev_ultrafast` always
+  sends a `reasoning`/`thinking` field.
+- 2026-10-29 first real Jev runs on Mac Chrome: DuckDuckGo search goal → `done` in 4.6 s (fill via DeepSeek, 9 model
+  calls, one needless extra click). example.com "Open the 'Learn more' link" → clicked correctly, then Jev said
+  BLOCKED instead of DONE (goals phrased as an action, not an end state, may end `blocked`). Android untested with real Jev.
 - Commit messages end with `Co-Authored-By:` attribution per the repo's convention; don't push or merge without Eduardo.
 
 ## Known residuals after final review (2026-10-29)
