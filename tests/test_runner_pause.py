@@ -257,3 +257,98 @@ def test_empty_input_treated_as_missing(cfg):
     r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1", "DONE"]))
     r.run()
     assert r.resume(input="")["status"] == "paused_needs_input" and t.acted == []
+
+
+# --- fix round 2: one money action per run ---
+
+class RaiseOnce(FakeTarget):
+    def __init__(self, pages, exc, **kw):
+        super().__init__(pages, **kw)
+        self.exc, self.attempts = exc, 0
+
+    def act(self, action, page, text=None, verify=False):
+        self.attempts += 1
+        if self.exc is not None:
+            exc, self.exc = self.exc, None
+            raise exc
+        return super().act(action, page, text, verify)
+
+
+class ObserveCrashOnceAfterAct(FakeTarget):
+    crashed = False
+
+    def observe(self):
+        if self.acted and not self.crashed:
+            self.crashed = True
+            raise RuntimeError("observe died")
+        return super().observe()
+
+
+MATCH = "Destino ****4066 Monto ₡150.000,00"
+
+
+def test_uncertain_autonomous_tap_never_retried_by_resume(cfg):
+    t = RaiseOnce([page(click("n9", "Transferir"), text=MATCH), page()],
+                  RuntimeError("timeout after tap"))
+    r = Runner("s", t, "pay", PAY, cfg, choose=scripted_choose(["n9", "n9", "DONE"]))
+    assert r.run()["reason"] == "money_action_uncertain"
+    out = r.resume()
+    assert (out["status"], out["reason"]) == ("error", "money_action_uncertain")
+    assert t.attempts == 1
+
+
+def test_post_act_crash_then_resume_taps_once_and_keeps_receipt_flag(cfg):
+    confirm = page(click("n9", "Transferir"), text=MATCH)
+    t = ObserveCrashOnceAfterAct([confirm], stuck_ids={"n9"})
+    r = Runner("s", t, "pay", PAY, cfg, choose=scripted_choose(["n9", "n9", "DONE"]))
+    assert r.run()["status"] == "error"
+    out = r.resume()
+    assert (out["status"], out["reason"]) == ("paused_mismatch", "money_already_attempted")
+    assert t.acted == [("n9", None)] and r.executed_money is True
+
+
+def test_second_money_tap_in_same_run_pauses_until_confirmed(cfg):
+    confirm = page(click("n9", "Transferir"), text=MATCH)
+    t = FakeTarget([confirm], stuck_ids={"n9"})
+    r = Runner("s", t, "pay", PAY, cfg, choose=scripted_choose(["n9", "n9", "DONE"]))
+    out = r.run()
+    assert (out["status"], out["reason"]) == ("paused_mismatch", "money_already_attempted")
+    assert t.acted == [("n9", None)]
+    assert r.resume(confirm=True)["status"] == "done" and len(t.acted) == 2
+
+
+def test_resume_after_uncertain_never_acts_with_any_args(cfg):
+    t = RaiseOnce([page(click("n9", "Transferir"), text=MATCH), page()], RuntimeError("x"))
+    r = Runner("s", t, "pay", PAY, cfg, choose=scripted_choose(["n9"] + ["n9", "DONE"] * 5))
+    r.run()
+    for kw in ({}, {"confirm": True}, {"input": "123456"}, {"instruction": "retry"}):
+        out = r.resume(**kw)
+        assert (out["status"], out["reason"]) == ("error", "money_action_uncertain"), kw
+    assert r.run()["reason"] == "money_action_uncertain"
+    assert t.attempts == 1 and t.acted == []
+
+
+def test_stale_before_tap_is_not_uncertain_autonomous(cfg):
+    from jev_mcp.targets.base import StalePage
+    t = RaiseOnce([page(click("n9", "Transferir"), text=MATCH), page()], StalePage())
+    r = Runner("s", t, "pay", PAY, cfg, choose=scripted_choose(["n9", "n9", "DONE"]))
+    out = r.run()
+    assert out["status"] == "done" and t.acted == [("n9", None)]
+
+
+def test_stale_before_tap_is_not_uncertain_confirmed(cfg):
+    from jev_mcp.targets.base import StalePage
+    t = RaiseOnce([page(click("n9", "Transferir")), page()], None)
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9", "DONE"]))
+    r.run()
+    t.exc = StalePage()
+    out = r.resume(confirm=True)
+    assert out["status"] == "paused_mismatch" and out["reason"] != "money_action_uncertain"
+    assert r.money_attempted is False and t.acted == []
+    assert r.resume(confirm=True)["status"] == "done" and t.acted == [("n9", None)]
+
+
+def test_confirm_transfer_label_without_params_pauses(cfg):
+    t = FakeTarget([page(click("n9", "Confirm transfer"), url="any.site/x")])
+    out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9"])).run()
+    assert out["status"] == "paused_mismatch" and t.acted == []

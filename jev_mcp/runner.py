@@ -92,29 +92,30 @@ class Runner:
         self.secrets: list[str] = []
         self.pending: dict | None = None
         self.last_used = time.time()
-        self.executed_money = False
+        self.executed_money = False  # never reset once True: the receipt must survive
+        self.money_attempted = False  # one autonomous money action per run; never reset
+        self._money_uncertain = False  # terminal: the session must be ended
         self.receipt: dict | None = None
         self._started = time.perf_counter()
         self._stale = 0
 
     def run(self) -> dict:
+        if self._money_uncertain:
+            return result.build(self)
         if not self.status.startswith("paused"):
-            self.pending, self.receipt, self.executed_money = None, None, False
+            self.pending = None
         return self._drive()
 
     def resume(self, input: str | None = None, instruction: str | None = None,
                confirm: bool = False) -> dict:
         """Continue a paused run. Never lets a secret value reach a result."""
+        if self._money_uncertain:
+            return result.build(self)
         if instruction:
             self.goal += "\n" + instruction
         pending = self.pending
         if pending is None:
             return self.run()
-        if pending.get("attempted"):
-            # A money tap may have happened: never offer a second confirm.
-            self.pending = None
-            self.status, self.reason = "error", "money_action_uncertain"
-            return result.build(self)
         if instruction and self.reason in ESCAPABLE:
             # Escape hatch: the paused element is gone; let Jev re-plan (guards still apply).
             self.pending = None
@@ -168,12 +169,16 @@ class Runner:
             self._execute(action, page, input, verify=True, secret=True)
             self.pending = None
             return
-        if not (same_screen and self._text_hash(page) == pending["text_hash"]):
-            # Screen changed since the human looked at it: their confirm no longer applies.
-            self._guard_money(action, page, self._money_params())
-            return
-        self._execute(action, page, None, verify=True, money=True)
-        self.pending = None
+        try:
+            if not (same_screen and self._text_hash(page) == pending["text_hash"]):
+                # Screen changed since the human looked at it: their confirm no longer applies.
+                self._guard_money(action, page, self._money_params())
+                return
+            self._execute(action, page, None, verify=True, money=True)
+        except StalePage:
+            # The target refused before tapping: nothing moved; keep waiting for a confirm.
+            self.page = {}
+            raise _Stop("paused_mismatch", "screen_changed")
 
     def _text_hash(self, page: dict) -> str:
         return hashlib.sha256(scrub_text(page.get("text") or "", self.secrets).encode()).hexdigest()
@@ -236,15 +241,14 @@ class Runner:
         """Tap autonomously only on an exact on-screen match; otherwise pause."""
         text = scrub_text(page.get("text") or "", self.secrets)
         check = check_money(text, money_params, self.cfg.own_accounts)
-        if money_params and check.ok:
+        if money_params and check.ok and not self.money_attempted:
             self._execute(action, page, None, verify=True, money=True)
-            self.pending = None
             return
         self.pending = self._pending_for(
             "money", action, page, text_hash=self._text_hash(page),
             expected=scrub_value(check.expected, self.secrets),
             seen=scrub_value(check.seen, self.secrets))
-        raise _Stop("paused_mismatch")
+        raise _Stop("paused_mismatch", "money_already_attempted" if self.money_attempted else None)
 
     def _save_receipt(self, page: dict):
         text = scrub(page, self.secrets).get("text") or ""
@@ -293,14 +297,17 @@ class Runner:
         if secret and text:
             self.secrets.append(text)  # before acting, so even a target error is scrubbed
         if money:
-            if self.pending is not None:
-                self.pending["attempted"] = True  # never re-tap after an unknown outcome
+            before, self.money_attempted = self.money_attempted, True
             try:
                 self.target.act(action, page, text=text, verify=True)
+            except StalePage:
+                self.money_attempted = before  # refused before tapping: nothing moved
+                raise
             except Exception:  # noqa: BLE001 - outcome unknown: the money may have moved
-                self.pending = None
+                self.pending, self._money_uncertain = None, True
                 raise _Stop("error", "money_action_uncertain")
             self.executed_money = True
+            self.pending = None  # tapped: a crash below must not leave a confirmable pending
         elif verify:
             self.target.act(action, page, text=text, verify=True)
         else:

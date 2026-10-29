@@ -22,7 +22,7 @@ class Config:
     # Strong labels: guarded on any app/site, always.
     money_labels: list[str] = field(default_factory=lambda: [
         "Transferir", "Pagar", "Pagar ahora", "Confirmar pago", "Confirmar transferencia",
-        "Pay", "Pay now", "Transfer", "Send money",
+        "Pay", "Pay now", "Transfer", "Send money", "Confirm transfer", "Confirm payment",
     ])
     # Contextual labels: guarded only with money params or on a configured money app.
     money_labels_contextual: list[str] = field(default_factory=lambda: [
