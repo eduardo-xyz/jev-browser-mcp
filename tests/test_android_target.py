@@ -40,6 +40,28 @@ class FakeDevice:
         self.fail_next_click = None
         self.shell_out = ""
         self.labels = {}
+        self.focus_override = None  # bounds dict, or "none" for no focus
+        self._last_tap = (0, 0)
+        self.fail_connect_after = None
+        self.info_errors = {}
+
+    def __call__(self, **kw):
+        assert kw == {"focused": True}
+        d = self
+
+        class Sel:
+            @property
+            def exists(self):
+                return d.focus_override != "none"
+
+            @property
+            def info(self):
+                if isinstance(d.focus_override, dict):
+                    return {"bounds": d.focus_override}
+                x, y = d._last_tap
+                return {"bounds": {"left": x - 5, "top": y - 5, "right": x + 5, "bottom": y + 5}}
+
+        return Sel()
 
     def app_current(self):
         return self.current
@@ -55,6 +77,7 @@ class FakeDevice:
         if self.fail_next_click:
             e, self.fail_next_click = self.fail_next_click, None
             raise e
+        self._last_tap = (x, y)
         self.calls.append(("click", x, y))
 
     def send_keys(self, text, clear=True):
@@ -79,6 +102,12 @@ class FakeDevice:
         return SimpleNamespace(output=self.shell_out)
 
     def app_info(self, pkg):
+        if pkg in self.info_errors:
+            e = self.info_errors[pkg]
+            if isinstance(e, tuple):  # one-shot
+                del self.info_errors[pkg]
+                raise e[0]
+            raise e
         return {"label": self.labels[pkg]}
 
 
@@ -251,3 +280,88 @@ def test_app_name_resolved_and_started(link):
     d = _dev_with_apps({"com.whatsapp": "WhatsApp"})
     mk(link, d, app="WhatsApp")
     assert ("app_start", "com.whatsapp") in d.calls
+
+
+def _fill_target(fake_device, link):
+    t = mk(link, fake_device)
+    p = t.observe()
+    f = next(a for a in p["actions"] if a.get("resource_id", "").endswith("txtUsername"))
+    return t, p, f
+
+
+def test_fill_focus_elsewhere_raises_stale_without_typing(fake_device, link):
+    t, p, f = _fill_target(fake_device, link)
+    fake_device.focus_override = {"left": 0, "top": 0, "right": 10, "bottom": 10}
+    with pytest.raises(StalePage):
+        t.act(f, p, text="secret")
+    assert not any(c[0] == "send_keys" for c in fake_device.calls)
+
+
+def test_fill_no_focus_raises_stale(fake_device, link):
+    t, p, f = _fill_target(fake_device, link)
+    fake_device.focus_override = "none"
+    with pytest.raises(StalePage):
+        t.act(f, p, text="secret")
+    assert not any(c[0] == "send_keys" for c in fake_device.calls)
+
+
+def test_click_does_not_check_focus(fake_device, link):
+    t = mk(link, fake_device)
+    p = t.observe()
+    fake_device.focus_override = "none"
+    t.act(btn(p), p)
+    assert fake_device.calls[-1] == ("click", 799, 1265)
+
+
+def test_connection_error_after_retry_maps_to_disconnected(fake_device, link):
+    t = mk(link, fake_device)
+    orig = fake_device.dump_hierarchy
+    def boom(compressed=False):
+        raise ConnectionError("down")
+    fake_device.dump_hierarchy = boom
+    with pytest.raises(DeviceDisconnected):
+        t.observe()
+
+
+def test_connect_error_inside_input_maps_to_disconnected(fake_device, link):
+    t = mk(link, fake_device)
+    p = t.observe()
+    t.d = None
+    def bad(serial):
+        raise ConnectionError("no")
+    t._connect = bad
+    with pytest.raises(DeviceDisconnected):
+        t.act(btn(p), p)
+
+
+def test_resolve_app_survives_connection_error_via_reconnect(link):
+    d = _dev_with_apps({"com.whatsapp": "WhatsApp"})
+    d.info_errors["com.whatsapp"] = (ConnectionError("x"),)
+    t = mk(link, d, app="whatsapp")
+    assert ("app_start", "com.whatsapp") in d.calls
+    assert link.ensure_calls == 2
+
+
+def test_resolve_app_does_not_cache_failures():
+    d = _dev_with_apps({"com.whatsapp": "WhatsApp", "b.c": "Other"})
+    d.info_errors["com.whatsapp"] = ValueError("flaky")
+    cache = {}
+    with pytest.raises(TargetBlocked):
+        resolve_app(d, "whatsapp", cache)
+    assert "com.whatsapp" not in cache
+    del d.info_errors["com.whatsapp"]
+    assert resolve_app(d, "whatsapp", cache) == "com.whatsapp"
+
+
+def test_resolve_app_blank_name():
+    d = _dev_with_apps({"a.b": "Maps"})
+    with pytest.raises(TargetBlocked) as e:
+        resolve_app(d, "  ")
+    assert e.value.reason == "app_not_found: "
+
+
+def test_resolve_app_ambiguous_dedupes_labels():
+    d = _dev_with_apps({"a.b": "Maps", "c.d": "Maps"})
+    with pytest.raises(TargetBlocked) as e:
+        resolve_app(d, "maps")
+    assert e.value.reason == "app_ambiguous: Maps"

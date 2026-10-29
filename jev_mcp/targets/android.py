@@ -49,10 +49,14 @@ def resolve_app(d, name: str, cache: dict | None = None) -> str:
         if pkg not in cache:
             try:
                 cache[pkg] = (d.app_info(pkg) or {}).get("label") or ""
+            except _CONN_ERRORS:
+                raise
             except Exception:
-                cache[pkg] = ""
+                continue  # unreadable label: skip, and don't cache the failure
         labels[pkg] = cache[pkg]
     want = normalize(name)
+    if not want:
+        raise TargetBlocked(f"app_not_found: {name.strip()}")
     exact = [p for p, l in labels.items() if l and normalize(l) == want]
     if not exact:
         exact = [p for p, l in labels.items() if l and normalize(l).startswith(want)]
@@ -61,7 +65,7 @@ def resolve_app(d, name: str, cache: dict | None = None) -> str:
     if not exact:
         raise TargetBlocked(f"app_not_found: {name}")
     if len(exact) > 1:
-        raise TargetBlocked("app_ambiguous: " + ", ".join(sorted(labels[p] for p in exact)))
+        raise TargetBlocked("app_ambiguous: " + ", ".join(sorted({labels[p] for p in exact})))
     return exact[0]
 
 
@@ -81,13 +85,16 @@ class AndroidTarget:
         self.d = None
         self._dev()
         if app:
-            pkg = app if "." in app else resolve_app(self.d, app, self._labels)
+            pkg = app if "." in app else self._call(lambda d: resolve_app(d, app, self._labels))
             if (self._call(lambda d: d.app_current()) or {}).get("package") != pkg:
                 self._call(lambda d: d.app_start(pkg))
 
     def _dev(self):
         if self.d is None:
-            self.d = self._connect(self.link.ensure_connected())
+            try:
+                self.d = self._connect(self.link.ensure_connected())
+            except _CONN_ERRORS as e:
+                raise DeviceDisconnected(f"cannot connect: {e}") from e
         return self.d
 
     def _call(self, fn):
@@ -96,7 +103,11 @@ class AndroidTarget:
             return fn(self._dev())
         except _CONN_ERRORS:
             self.d = None
-        return fn(self._dev())  # ensure_connected raises DeviceDisconnected if it can't
+        try:
+            return fn(self._dev())  # ensure_connected raises DeviceDisconnected if it can't
+        except _CONN_ERRORS as e:
+            self.d = None
+            raise DeviceDisconnected(f"connection lost: {e}") from e
 
     def observe(self) -> dict:
         def read(d):
@@ -114,9 +125,8 @@ class AndroidTarget:
 
     def _input(self, fn):
         """Send input once. A connection error here is never retried: input may have landed."""
-        d = self._dev()
         try:
-            fn(d)
+            fn(self._dev())
         except _CONN_ERRORS as e:
             self.d = None
             raise DeviceDisconnected(f"connection lost during input: {e}") from e
@@ -132,6 +142,13 @@ class AndroidTarget:
             def tap(d):
                 d.click(cx, cy)
                 if kind == "fill":
+                    sleep(0.1)
+                    sel = d(focused=True)
+                    if not sel.exists:
+                        raise StalePage()
+                    fb = sel.info["bounds"]
+                    if not (fb["left"] <= cx <= fb["right"] and fb["top"] <= cy <= fb["bottom"]):
+                        raise StalePage()  # focus landed elsewhere; nothing typed yet
                     d.send_keys(text or "", clear=True)
 
             self._input(tap)

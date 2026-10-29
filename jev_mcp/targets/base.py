@@ -27,7 +27,8 @@ class Target(Protocol):
     def act(self, action: dict, page: dict, text: str | None = None, verify: bool = False) -> None:
         """Perform `action` on the screen.
 
-        StalePage may only be raised before any input is sent to the screen (verify check).
+        StalePage may only be raised before any text is typed or any irreversible tap is sent
+        (the verify check, or a fill whose tap did not focus the target field).
         Any exception after input may have been sent is treated by the runner as an
         uncertain action.
         """
