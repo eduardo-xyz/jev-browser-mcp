@@ -21,7 +21,7 @@ class Flow:
     steps: list[dict] = field(default_factory=list)
 
 
-def _slug(name: str) -> str:
+def slug(name: str) -> str:
     s = unicodedata.normalize("NFKD", name)
     s = "".join(c for c in s if not unicodedata.combining(c)).lower()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
@@ -37,7 +37,7 @@ class FlowStore:
         self.root = Path(root)
 
     def _path(self, name: str) -> Path:
-        return self.root / f"{_slug(name)}.json"
+        return self.root / f"{slug(name)}.json"
 
     def save(self, flow: Flow) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -109,8 +109,15 @@ def find_by_locator(page: dict, locator: dict) -> list[dict]:
 
 
 def locate(locator: dict, page: dict) -> dict | None:
-    """The single matching action, or None when absent or ambiguous."""
+    """The single matching action, or None when absent or ambiguous.
+
+    A non-fill element found by resource_id must also keep its recorded label (a reused
+    row id may now say "Luz ICE" instead of "Agua AyA"). Fills match by resource_id only:
+    an input's label is often its current text.
+    """
     found = find_by_locator(page, locator)
+    if locator.get("resource_id") and locator.get("kind") != "fill" and locator.get("label"):
+        found = [a for a in found if a.get("label") == locator["label"]]
     return found[0] if len(found) == 1 else None
 
 

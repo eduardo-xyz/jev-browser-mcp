@@ -15,6 +15,7 @@ from .flows import (
     flow_from_history,
     locate,
     matches,
+    slug,
     value_source,
 )
 from .guards import (
@@ -82,8 +83,13 @@ class Runner:
         self.goal = goal_text(goal, params)
         self._goal_raw = goal  # saved flows keep the goal without this run's values
         self.max_steps, self.money_params, self.flow = max_steps, money_params or [], flow
+        if flow is not None:  # the flow's money-critical keys guard every replay
+            self.money_params = sorted({*self.money_params, *flow.money_params})
+        if save_as is not None:
+            slug(save_as)  # reject an unusable name now, not after the run
         self.save_as, self.store, self.start = save_as, store, start
         self.flow_i = 0  # next recorded step expected when replaying `flow`
+        self._resyncing = False  # Jev decided during a flow: look ahead to resync
         self.flow_saved: str | None = None
         self._choose, self._field_text = choose, field_text
         self.status, self.reason = "running", None
@@ -228,6 +234,8 @@ class Runner:
             raise _Stop("blocked", "no_progress")
         page = self._observe()
         replay = self._match_flow(page)
+        if replay is None and self.flow is not None:
+            self._resyncing = True
         decision = None if replay else self._decide(scrub(page, self.secrets))
         try:
             if replay:
@@ -270,13 +278,15 @@ class Runner:
         if self.flow is None:
             return None
         steps = self.flow.steps
-        for j in range(self.flow_i, min(self.flow_i + RESYNC_WINDOW, len(steps))):
+        window = RESYNC_WINDOW if self._resyncing else 1
+        for j in range(self.flow_i, min(self.flow_i + window, len(steps))):
             step = steps[j]
             if not matches(step["signature"], page):
                 continue
             action = locate(step["locator"], page)
             if action is None or not self._replayable(step, action):
                 return None  # this screen is the expected one but differs: let Jev decide
+            self._resyncing = False
             return j, step, action
         return None
 

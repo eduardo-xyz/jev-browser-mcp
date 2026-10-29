@@ -154,7 +154,9 @@ def test_matches_requires_same_where_and_jaccard():
 def test_locate_by_resource_id_then_label_and_controls():
     p = page(click("n1", "Pagar", rid="pay"), click("n2", "Pagar"))
     p["actions"].append({"id": "scroll_down", "kind": "scroll", "label": "Scroll down"})
-    assert locate({"kind": "click", "resource_id": "pay", "label": "X", "role": "button"}, p)["id"] == "n1"
+    assert locate({"kind": "click", "resource_id": "pay", "label": "Pagar", "role": "button"}, p)["id"] == "n1"
+    assert locate({"kind": "click", "resource_id": "pay", "label": "X", "role": "button"}, p) is None
+    assert locate({"kind": "click", "resource_id": "pay", "label": "", "role": "button"}, p)["id"] == "n1"
     assert locate({"kind": "click", "resource_id": None, "label": "Pagar", "role": "button"}, p) is None
     assert locate({"control": "scroll_down"}, p)["id"] == "scroll_down"
     assert locate({"control": "back"}, p) is None
@@ -190,3 +192,78 @@ def test_replay_retries_step_after_stale_page(tmp_path, cfg):
     t = StaleOnce([page(click("n1", "Siguiente")), page()])
     out = Runner("b", t, "g", None, cfg, flow=store.load("f"), choose=scripted_choose(["DONE"])).run()
     assert out["status"] == "done" and out["model_calls"] == 1 and t.acted == [("n1", None)]
+
+
+# --- fix round 1 ---
+
+def test_replay_applies_flow_money_params(tmp_path, cfg):
+    store = FlowStore(tmp_path)
+    params = {"amount": 5, "recipient": RECIPIENT, "service_number": "123456"}
+
+    def pages(service):
+        return [page(click("n2", "Pagar", rid="pay"),
+                     text=f"Destino ****4066 Monto ₡5 Servicio {service}"),
+                page(text="Pago exitoso")]
+
+    out = Runner("a", FakeTarget(pages("123456")), "pay", params, cfg,
+                 money_params=["service_number"], save_as="svc", store=store,
+                 choose=scripted_choose(["n2", "DONE"])).run()
+    assert out["flow_saved"] == "svc" and store.load("svc").money_params == ["service_number"]
+    # Replay passes only flow=: the flow's money_params must still guard the tap.
+    t = FakeTarget(pages("999999"))
+    out = Runner("b", t, "pay", params, cfg, flow=store.load("svc"),
+                 choose=scripted_choose([])).run()
+    assert out["status"] == "paused_mismatch" and t.acted == []
+
+
+def test_replay_does_not_skip_ahead_without_jev_fallback(tmp_path, cfg):
+    store = FlowStore(tmp_path)
+    rec = [page(click("a1", "Servicios"), url="app://home"),
+           page(click("b1", "Agua"), url="app://servicios"),
+           page(click("c1", "Ver recibo"), url="app://agua"),
+           page(url="app://recibo")]
+    Runner("a", FakeTarget(rec), "recibo", None, cfg, save_as="r", store=store,
+           choose=scripted_choose(["a1", "b1", "c1", "DONE"])).run()
+    # Replay starts on B, but step 0 is A: Jev must be consulted, not B replayed blindly.
+    rep = [page(click("b1", "Agua"), url="app://servicios"),
+           page(click("c1", "Ver recibo"), url="app://agua"),
+           page(url="app://recibo")]
+    calls = []
+
+    def choose(view, goal, history):
+        calls.append(view["url"])
+        return scripted_choose(["b1" if view["url"] == "app://servicios" else "DONE"])(
+            view, goal, history)
+
+    t = FakeTarget(rep)
+    out = Runner("b", t, "recibo", None, cfg, flow=store.load("r"), choose=choose).run()
+    assert out["status"] == "done"
+    assert calls == ["app://servicios", "app://recibo"]  # C was replayed after resync
+    assert [a for a, _ in t.acted] == ["b1", "c1"]
+
+
+def test_replay_click_by_rid_requires_same_label(tmp_path, cfg):
+    store = FlowStore(tmp_path)
+    Runner("a", FakeTarget([page(click("n1", "Agua AyA", rid="svc")), page()]), "g", None, cfg,
+           save_as="f", store=store, choose=scripted_choose(["n1", "DONE"])).run()
+    t = FakeTarget([page(click("n1", "Luz ICE", rid="svc")), page()])
+    flow = store.load("f")
+    flow.steps[0]["signature"]["labels"] = ["Luz ICE"]  # isolate the locator check
+    out = Runner("b", t, "g", None, cfg, flow=flow, choose=scripted_choose(["DONE"])).run()
+    assert out["status"] == "done" and out["model_calls"] == 1 and t.acted == []
+
+
+def test_replay_fill_by_rid_ignores_label(tmp_path, cfg):
+    store = FlowStore(tmp_path)
+    Runner("a", FakeTarget([page(fill("n1", "Monto", rid="amt")), page()]), "g", {"amount": 5}, cfg,
+           save_as="f", store=store, choose=scripted_choose(["n1", "DONE"]), field_text=text5).run()
+    flow = store.load("f")
+    flow.steps[0]["signature"]["labels"] = ["5"]
+    t = FakeTarget([page(fill("n1", "5", rid="amt")), page()])  # EditText label = current text
+    out = Runner("b", t, "g", {"amount": 6}, cfg, flow=flow, choose=scripted_choose(["DONE"])).run()
+    assert out["model_calls"] == 1 and t.acted == [("n1", "6")]
+
+
+def test_invalid_save_as_rejected_up_front(tmp_path, cfg):
+    with pytest.raises(ValueError):
+        Runner("a", FakeTarget([page()]), "g", None, cfg, save_as="!!!", store=FlowStore(tmp_path))
