@@ -521,3 +521,16 @@ def test_helper_exit_2_is_not_reported_busy(fake_adb, fake_clock, cfg_android):
     with pytest.raises(DeviceDisconnected) as e:
         link.ensure_connected()
     assert "busy" not in str(e.value)
+
+
+@pytest.mark.parametrize("method", ["ensure_connected", "close"])
+def test_link_calls_are_serialized(fake_adb, cfg_android, method):
+    fake_adb.devices = ["zdirl7t84pqwh6ww\tdevice"]
+    link = AdbLink(cfg_android, run=fake_adb)
+    done = threading.Event()
+    with link._lock:  # another thread is mid-call
+        th = threading.Thread(target=lambda: (getattr(link, method)(), done.set()))
+        th.start()
+        assert not done.wait(0.2)
+    th.join(5)
+    assert done.is_set()

@@ -116,8 +116,10 @@ def test_device_busy(daemon_with_fakes, keys):
     assert second == {"ok": False, "error": f"device_busy: {sid} (status=paused_needs_input; "
                                             "pass session_id or end_session)"}
     assert daemon_with_fakes.targets_created == 1
-    # a different device key is not locked, and chrome is never locked
-    assert run(daemon_with_fakes, target="android", goal="otp", device="other")["ok"]
+    # every android session shares one device lock, whatever `device` alias is passed
+    r = run(daemon_with_fakes, target="android", goal="otp", device="default")
+    assert r["error"].startswith(f"device_busy: {sid}")
+    # chrome is never locked
     assert run(daemon_with_fakes, target="chrome", goal="otp", url_or_app="https://x")["ok"]
     # ending the holder frees the device
     assert daemon_with_fakes.handle({"op": "end_session", "args": {"session_id": sid}})["ok"]
@@ -577,3 +579,50 @@ def test_client_spawn_logs_stderr_and_timeout_mentions_it(short_dir, monkeypatch
     with pytest.raises(RuntimeError, match="jevd.stderr"):
         client.call("status", {})
     assert Path(seen["stderr"].name) == short_dir / "jevd.stderr"
+
+
+def test_unknown_device_rejected(script, keys):
+    d = Daemon(Config(android_serial="abc123"), target_factory=script.target_factory,
+               runner_factory=script.runner_factory)
+    try:
+        assert run(d, target="android", goal="otp", device="other") == {
+            "ok": False, "error": "unknown_device: other"}
+        assert d.targets_created == 0
+        sid = run(d, target="android", goal="otp", device="abc123")["result"]["session_id"]
+        # the configured serial and "default" are the same phone: one lock
+        r = run(d, target="android", goal="otp", device="default")
+        assert r["error"].startswith(f"device_busy: {sid}")
+        r = run(d, target="android", goal="otp")
+        assert r["error"].startswith(f"device_busy: {sid}")
+    finally:
+        d.close()
+
+
+def test_close_warns_when_money_may_be_in_flight(daemon_with_fakes, keys, caplog, monkeypatch):
+    monkeypatch.setattr(daemon, "CLOSE_WAIT_S", 0.05)
+    caplog.set_level("DEBUG", logger="jevd")
+    d = daemon_with_fakes
+    sid = run(d, target="android", goal="otp")["result"]["session_id"]
+    d.sessions[sid].runner.money_attempted = True
+    lock = d.sessions[sid].lock
+    lock.acquire()
+    try:
+        d.close()
+    finally:
+        lock.release()
+    warn = [r for r in caplog.records if r.levelname == "WARNING" and "money action may be in flight" in r.getMessage()]
+    assert warn and sid in warn[0].getMessage()
+
+
+def test_close_no_money_warning_without_money_attempt(daemon_with_fakes, keys, caplog, monkeypatch):
+    monkeypatch.setattr(daemon, "CLOSE_WAIT_S", 0.05)
+    caplog.set_level("DEBUG", logger="jevd")
+    d = daemon_with_fakes
+    sid = run(d, target="android", goal="otp")["result"]["session_id"]
+    lock = d.sessions[sid].lock
+    lock.acquire()
+    try:
+        d.close()
+    finally:
+        lock.release()
+    assert "money action may be in flight" not in caplog.text

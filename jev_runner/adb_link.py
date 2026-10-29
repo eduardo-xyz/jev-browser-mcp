@@ -124,6 +124,7 @@ class AdbLink:
         self._tcpip_done = False
         self._relay_busy = False
         self.serial: str | None = None  # last serial reached; None after a failed connect
+        self._lock = threading.Lock()  # sessions on different threads share this link
 
     def _timeout(self, deadline: float, cap: float = 15) -> float:
         return min(cap, max(1.0, deadline - self._clock()))
@@ -246,6 +247,10 @@ class AdbLink:
         return wireless if self._device_states(deadline).get(wireless) == "device" else None
 
     def ensure_connected(self) -> str:
+        with self._lock:
+            return self._ensure_connected()
+
+    def _ensure_connected(self) -> str:
         deadline = self._clock() + self.cfg.reconnect_window_s
         while True:
             serial = self._attempt(deadline)
@@ -261,6 +266,10 @@ class AdbLink:
             self._sleep(1)
 
     def close(self) -> None:
+        with self._lock:
+            self._close()
+
+    def _close(self) -> None:
         had_relay = self.relay is not None
         self._stop_relay()
         if had_relay:

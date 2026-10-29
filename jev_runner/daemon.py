@@ -31,6 +31,7 @@ REQUEST_TIMEOUT_S = 30  # for reading the request line only, never for the run
 MAX_REQUEST_BYTES = 1_000_000
 CLOSE_WAIT_S = 1.0
 RESUMABLE_ERRORS = ("device_disconnected", "stale_page", "interrupted")
+ANDROID_KEY = "android"  # one configured phone: every android session shares one lock
 TERMINAL_MSG = "session_terminal: money_action_uncertain; verify manually, then end_session"
 
 log = logging.getLogger("jevd")
@@ -168,6 +169,8 @@ class Daemon:
                           "(restart jevd after setting keys)")
         if target not in TARGETS:
             raise OpError(f"unknown_target: {target}")
+        if target == "android" and device not in (None, "default", self.cfg.android_serial):
+            raise OpError(f"unknown_device: {device}")
         explicit = None
         if flow is not None:
             try:
@@ -220,7 +223,7 @@ class Daemon:
 
         An android device held by a settled, idle session is reused (warm target),
         unless a different app was asked for — then that session is replaced."""
-        key = (device or "default") if target == "android" else None
+        key = ANDROID_KEY if target == "android" else None
         while key is not None:
             with self._lock:
                 holder_id = self.devices.get(key)
@@ -249,7 +252,7 @@ class Daemon:
 
     def _open(self, target: str, url_or_app: str | None, device: str | None) -> Session:
         sid = uuid4().hex[:8]
-        key = (device or "default") if target == "android" else None
+        key = ANDROID_KEY if target == "android" else None
         with self._lock:
             if key is not None:
                 holder = self.devices.get(key)
@@ -369,6 +372,9 @@ class Daemon:
             sessions = list(self.sessions.values())
         for s in sessions:
             got = s.lock.acquire(timeout=CLOSE_WAIT_S)
+            if not got and getattr(s.runner, "money_attempted", False):
+                log.warning("shutdown: session=%s money action may be in flight "
+                            "(status=%s); verify the app manually", s.session_id, s.status())
             if not got:
                 log.warning("shutdown: session=%s busy (status=%s); closing its target anyway",
                             s.session_id, s.status())
