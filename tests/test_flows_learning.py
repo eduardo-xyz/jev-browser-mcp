@@ -1,7 +1,7 @@
 import json
 
-from jev_mcp.flows import FlowStore, auto_name, goal_key
-from jev_mcp.runner import Runner
+from jev_runner.flows import FlowStore, auto_name, goal_key
+from jev_runner.runner import Runner
 from tests.fakes import FakeTarget, click, fill, page, scripted_choose
 
 RECIPIENT = "CR05015202001026284066"

@@ -10,8 +10,8 @@ import subprocess
 import threading
 import time
 
-from jev_mcp.config import Config
-from jev_mcp.targets.base import DeviceDisconnected
+from jev_runner.config import Config
+from jev_runner.targets.base import DeviceDisconnected
 
 _SERVICES = ["_adb-tls-connect._tcp.local.", "_adb._tcp.local."]
 

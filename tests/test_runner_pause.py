@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from jev_mcp.config import Config
-from jev_mcp.runner import Runner
+from jev_runner.config import Config
+from jev_runner.runner import Runner
 from tests.fakes import FakeTarget, click, fill, page, scripted_choose
 
 
@@ -331,7 +331,7 @@ def test_resume_after_uncertain_never_acts_with_any_args(cfg):
 
 
 def test_stale_before_tap_is_not_uncertain_autonomous(cfg):
-    from jev_mcp.targets.base import StalePage
+    from jev_runner.targets.base import StalePage
     t = RaiseOnce([page(click("n9", "Transferir"), text=MATCH), page()], StalePage())
     r = Runner("s", t, "pay", PAY, cfg, choose=scripted_choose(["n9", "n9", "DONE"]))
     out = r.run()
@@ -339,7 +339,7 @@ def test_stale_before_tap_is_not_uncertain_autonomous(cfg):
 
 
 def test_stale_before_tap_is_not_uncertain_confirmed(cfg):
-    from jev_mcp.targets.base import StalePage
+    from jev_runner.targets.base import StalePage
     t = RaiseOnce([page(click("n9", "Transferir")), page()], None)
     r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9", "DONE"]))
     r.run()

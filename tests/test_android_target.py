@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from jev_mcp.targets.android import AndroidTarget, resolve_app
-from jev_mcp.targets.base import DeviceDisconnected, StalePage, TargetBlocked
+from jev_runner.targets.android import AndroidTarget, resolve_app
+from jev_runner.targets.base import DeviceDisconnected, StalePage, TargetBlocked
 
 FIXTURE = Path("tests/fixtures/android/bac_login.xml")
 SHADE_XML = (
@@ -113,7 +113,7 @@ class FakeDevice:
 
 @pytest.fixture(autouse=True)
 def _nosleep(monkeypatch):
-    monkeypatch.setattr("jev_mcp.targets.android.sleep", lambda s: None)
+    monkeypatch.setattr("jev_runner.targets.android.sleep", lambda s: None)
 
 
 @pytest.fixture

@@ -2,9 +2,9 @@ import base64
 
 import pytest
 
-from jev_mcp.targets import chrome as chrome_mod
-from jev_mcp.targets.base import StalePage, TargetBlocked
-from jev_mcp.targets.chrome import ChromeTarget
+from jev_runner.targets import chrome as chrome_mod
+from jev_runner.targets.base import StalePage, TargetBlocked
+from jev_runner.targets.chrome import ChromeTarget
 
 
 class StalePage_(Exception):  # stands in for upstream StalePage (matched by class name)

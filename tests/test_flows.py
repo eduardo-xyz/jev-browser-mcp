@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from jev_mcp.flows import Flow, FlowStore, flow_from_history, locate, matches, signature
-from jev_mcp.runner import Runner
+from jev_runner.flows import Flow, FlowStore, flow_from_history, locate, matches, signature
+from jev_runner.runner import Runner
 from tests.fakes import FakeTarget, click, fill, page, scripted_choose
 
 RECIPIENT = "CR05015202001026284066"
@@ -177,7 +177,7 @@ def test_flow_from_history_values():
 
 
 def test_replay_retries_step_after_stale_page(tmp_path, cfg):
-    from jev_mcp.targets.base import StalePage
+    from jev_runner.targets.base import StalePage
 
     class StaleOnce(FakeTarget):
         def act(self, action, page, text=None, verify=False):

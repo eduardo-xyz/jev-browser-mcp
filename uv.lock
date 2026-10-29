@@ -556,7 +556,7 @@ wheels = [
 ]
 
 [[package]]
-name = "jev-browser-mcp"
+name = "jev-runner"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

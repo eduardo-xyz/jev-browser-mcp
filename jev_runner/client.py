@@ -30,8 +30,8 @@ def _connect(path: Path) -> socket.socket:
 def _spawn(stderr_path: Path) -> None:
     with open(stderr_path, "ab") as err:  # the child keeps its own copy of the fd
         subprocess.Popen(
-            [sys.executable, "-m", "jev_mcp.daemon"],
-            cwd=REPO_ROOT,  # jev_mcp is imported from the repo, not an installed package
+            [sys.executable, "-m", "jev_runner.daemon"],
+            cwd=REPO_ROOT,  # jev_runner is imported from the repo, not an installed package
             stdin=subprocess.DEVNULL, stdout=err, stderr=err,
             start_new_session=True,  # survives the MCP server; inherits env (API keys)
         )

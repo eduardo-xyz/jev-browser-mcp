@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from jev_mcp.android_tree import parse_hierarchy
+from jev_runner.android_tree import parse_hierarchy
 
 
 def page():

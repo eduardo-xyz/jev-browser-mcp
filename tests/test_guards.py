@@ -1,5 +1,5 @@
-from jev_mcp.config import Config
-from jev_mcp.guards import (
+from jev_runner.config import Config
+from jev_runner.guards import (
     check_money,
     is_money_action,
     is_secret_field,
@@ -133,6 +133,6 @@ def test_scrub_respects_digit_boundaries():
 
 
 def test_scrub_value_recurses():
-    from jev_mcp.guards import scrub_value
+    from jev_runner.guards import scrub_value
     v = {"a": ["482913", ("x 482913",)], "b": 482913, "c": "4829130"}
     assert scrub_value(v, ["482913"]) == {"a": ["•••", ("x •••",)], "b": "•••", "c": "4829130"}

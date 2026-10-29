@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def data_dir() -> Path:
-    path = Path(os.environ.get("JEV_DATA_DIR") or Path.home() / ".local/share/jev-mcp")
+    path = Path(os.environ.get("JEV_DATA_DIR") or Path.home() / ".local/share/jev-runner")
     path.mkdir(parents=True, exist_ok=True)
     return path
 

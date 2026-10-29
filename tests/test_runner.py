@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from jev_mcp import runner as runner_mod
-from jev_mcp.runner import Runner
-from jev_mcp.targets.base import DeviceDisconnected
+from jev_runner import runner as runner_mod
+from jev_runner.runner import Runner
+from jev_runner.targets.base import DeviceDisconnected
 from tests.fakes import FakeTarget, click, fill, page, scripted_choose, unreadable
 
 
@@ -107,7 +107,7 @@ def test_unexpected_exception_becomes_error(cfg):
 
 
 def test_stale_post_act_observe_does_not_retry_act(cfg):
-    from jev_mcp.targets.base import StalePage
+    from jev_runner.targets.base import StalePage
     t = FakeTarget([page(click("n1", "X")), page()])
     calls = [0]
     orig = t.observe

@@ -1,7 +1,7 @@
 [project]
-name = "jev-browser-mcp"
+name = "jev-runner"
 version = "0.1.0"
-description = "MCP tool exposing TypeSafe's Jev browser agent (via browser-use/jev-ultrafast) to Claude Code/Desktop."
+description = "Daemon + MCP tools that run TypeSafe's Jev agent on Mac Chrome and Android apps."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

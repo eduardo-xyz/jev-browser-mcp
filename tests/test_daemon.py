@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from jev_mcp import client, daemon
-from jev_mcp.config import Config
-from jev_mcp.daemon import Daemon
-from jev_mcp.flows import Flow, FlowStore
-from jev_mcp.runner import Runner
-from jev_mcp.targets.base import DeviceDisconnected, TargetBlocked
+from jev_runner import client, daemon
+from jev_runner.config import Config
+from jev_runner.daemon import Daemon
+from jev_runner.flows import Flow, FlowStore
+from jev_runner.runner import Runner
+from jev_runner.targets.base import DeviceDisconnected, TargetBlocked
 from tests.fakes import FakeTarget, click, fill, page, scripted_choose
 
 RECIPIENT = "CR05015202001026284066"
@@ -347,7 +347,7 @@ def test_client_autostarts_daemon(short_dir, monkeypatch):
     try:
         assert client.call("status", {})["sessions"] == []
         cmd, kw = spawned[0]
-        assert cmd[1:] == ["-m", "jev_mcp.daemon"] and kw["start_new_session"] is True
+        assert cmd[1:] == ["-m", "jev_runner.daemon"] and kw["start_new_session"] is True
         assert client.call("status", {})["flows"] == 0
         assert len(spawned) == 1  # second call reuses the running daemon
     finally:

@@ -3,7 +3,7 @@ import itertools
 import json
 from pathlib import Path
 
-from jev_mcp.targets.base import StalePage  # noqa: F401
+from jev_runner.targets.base import StalePage  # noqa: F401
 
 _seq = itertools.count()
 

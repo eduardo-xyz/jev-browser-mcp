@@ -5,9 +5,9 @@ from contextlib import contextmanager
 
 import pytest
 
-from jev_mcp.adb_link import AdbLink, TcpRelay
-from jev_mcp.config import Config
-from jev_mcp.targets.base import DeviceDisconnected
+from jev_runner.adb_link import AdbLink, TcpRelay
+from jev_runner.config import Config
+from jev_runner.targets.base import DeviceDisconnected
 
 
 @pytest.fixture

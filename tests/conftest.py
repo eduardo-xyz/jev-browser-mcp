@@ -1,7 +1,7 @@
 """Shared fixtures: isolate the data dir and provide default config."""
 import pytest
 
-from jev_mcp import config
+from jev_runner import config
 
 
 @pytest.fixture(autouse=True)
