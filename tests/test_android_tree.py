@@ -128,3 +128,48 @@ def test_webview_skips_invisible_and_empty_text():
     p = parse_hierarchy(xml, "com.app", "Main")
     labels = [a["label"] for a in p["actions"] if "bounds" in a]
     assert labels == ["Shown"]
+
+
+def _webview_xml(countdown="Su sesión expira en 4:59", btn_label="Ingresar", btn_bounds="[10,500][500,600]"):
+    return (
+        '<hierarchy><node package="com.app" class="android.webkit.WebView" enabled="true"'
+        ' bounds="[0,0][1000,2000]">'
+        f'<node package="com.app" class="android.widget.TextView" text="{countdown}" enabled="true"'
+        ' bounds="[10,10][900,80]"/>'
+        f'<node package="com.app" class="android.widget.Button" text="{btn_label}" clickable="true"'
+        f' enabled="true" bounds="{btn_bounds}"/>'
+        '</node></hierarchy>'
+    )
+
+
+def test_synthetic_links_marked_and_excluded_from_fingerprint():
+    a = parse_hierarchy(_webview_xml(), "com.app", "Main")
+    b = parse_hierarchy(_webview_xml(countdown="Su sesión expira en 4:58"), "com.app", "Main")
+    link = next(x for x in a["actions"] if x.get("role") == "link")
+    assert link["synthetic"] is True
+    assert not any(x.get("synthetic") for x in a["actions"] if x.get("role") != "link")
+    assert a["fingerprint"] == b["fingerprint"]
+
+
+def test_real_clickable_change_still_changes_fingerprint():
+    base = parse_hierarchy(_webview_xml(), "com.app", "Main")["fingerprint"]
+    relabeled = parse_hierarchy(_webview_xml(btn_label="Entrar"), "com.app", "Main")["fingerprint"]
+    moved = parse_hierarchy(_webview_xml(btn_bounds="[10,700][500,800]"), "com.app", "Main")["fingerprint"]
+    assert base != relabeled and base != moved
+
+
+def test_nested_same_text_synthesizes_one_link():
+    xml = (
+        '<hierarchy><node package="com.app" class="android.webkit.WebView" enabled="true"'
+        ' bounds="[0,0][1000,2000]">'
+        '<node package="com.app" class="android.view.View" text="Ayuda" enabled="true"'
+        ' bounds="[0,100][500,300]">'
+        '<node package="com.app" class="android.widget.TextView" text="Ayuda" enabled="true"'
+        ' bounds="[50,150][400,250]"/></node>'
+        '<node package="com.app" class="android.widget.TextView" text="Ayuda" enabled="true"'
+        ' bounds="[600,100][900,300]"/>'
+        '</node></hierarchy>'
+    )
+    p = parse_hierarchy(xml, "com.app", "Main")
+    links = [a["bounds"] for a in p["actions"] if a.get("role") == "link"]
+    assert links == [[0, 100, 500, 300], [600, 100, 900, 300]]  # separate one elsewhere kept

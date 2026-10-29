@@ -124,7 +124,9 @@ class FlowStore:
 
 
 def element_labels(page: dict) -> list[str]:
-    return sorted(a["label"] for a in page.get("actions", []) if "node" in a)
+    # synthetic (WebView text) labels may be dynamic: keep them out of signatures
+    return sorted(a["label"] for a in page.get("actions", [])
+                  if "node" in a and not a.get("synthetic"))
 
 
 def signature(page: dict) -> dict:

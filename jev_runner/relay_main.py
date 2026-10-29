@@ -7,13 +7,16 @@ allows to reach the LAN (e.g. /usr/bin/python3); the uv-managed CPython running 
 "No route to host". Stdlib only, Python >= 3.9, no project imports.
 
 Prints "ready" on stdout once listening. Exits 0 on SIGTERM/SIGINT or when stdin reaches
-EOF (the parent died or closed it), 2 if the port cannot be bound.
+EOF (the parent died or closed it), 73 if the port cannot be bound (distinct from
+CPython's own exit 2, e.g. "can't open file").
 """
 import os
 import signal
 import socket
 import sys
 import threading
+
+BIND_FAILED = 73  # mirrored as adb_link._RELAY_BUSY_EXIT
 
 
 def _close(s):
@@ -88,7 +91,7 @@ def main(argv):
     except OSError as e:
         sys.stderr.write("relay: cannot bind 127.0.0.1:%d: %s\n" % (local_port, e))
         srv.close()
-        return 2
+        return BIND_FAILED
 
     threading.Thread(target=_accept_loop, args=(srv, host, port), daemon=True).start()
     threading.Thread(target=_watch_stdin, args=(stop,), daemon=True).start()

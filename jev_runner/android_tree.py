@@ -93,6 +93,11 @@ def _webview_link(n):
     return p is not None
 
 
+def _contains(outer, inner):
+    return (outer[0] <= inner[0] and outer[1] <= inner[1]
+            and outer[2] >= inner[2] and outer[3] >= inner[3])
+
+
 def _desc_text(n):
     parts = []
     for c in n.children:
@@ -171,6 +176,7 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
 
     actions = []
     text_nodes = []  # (bottom, text) of preceding included text nodes
+    synthetic = []  # WebView text links emitted so far
     scroll = False
     for i, n in enumerate(nodes):
         if not n.included:
@@ -216,8 +222,11 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
             if n.flag("checkable"):
                 act["checked"] = "true" if n.flag("checked") else "false"
             actions.append(act)
-        elif link:
-            actions.append({
+        elif link and not any(
+            a["label"] == (n.text or n.desc) and _contains(a["bounds"], n.bounds)
+            for a in synthetic
+        ):
+            synthetic.append({
                 "id": f"n{len(actions)}",
                 "node": len(actions),
                 "kind": "click",
@@ -227,7 +236,11 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
                 "resource_id": n.rid,
                 "bounds": n.bounds,
                 "password": False,
+                # synthesized from plain text: may be dynamic (countdowns, balances),
+                # so it never feeds the fingerprint
+                "synthetic": True,
             })
+            actions.append(synthetic[-1])
         own = n.text or n.desc
         if own and not (actionable and is_edit):
             text_nodes.append((b, own, i))
@@ -244,7 +257,7 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
 
     h = hashlib.sha256(url.encode())
     for a in actions:
-        if "bounds" in a:
+        if "bounds" in a and not a.get("synthetic"):
             h.update(repr((a["label"], a["role"], a["bounds"])).encode())
     readable = bool(text) or any(a["label"] for a in actions if "bounds" in a)
     return {

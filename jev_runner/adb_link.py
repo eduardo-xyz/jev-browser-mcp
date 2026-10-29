@@ -19,7 +19,7 @@ from jev_runner.targets.base import DeviceDisconnected
 RELAY_SCRIPT = str(Path(__file__).with_name("relay_main.py"))
 _SERVICES = ["_adb-tls-connect._tcp.local.", "_adb._tcp.local."]
 _TCPIP_SETTLE_S = 5.0  # adbd restarts after `adb tcpip`; wait this long for USB to return
-_RELAY_BUSY_EXIT = 2  # relay_main.py exit code when the port cannot be bound
+_RELAY_BUSY_EXIT = 73  # relay_main.BIND_FAILED; not 2, which CPython uses itself
 
 
 class RelayBusy(OSError):

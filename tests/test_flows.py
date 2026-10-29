@@ -267,3 +267,13 @@ def test_replay_fill_by_rid_ignores_label(tmp_path, cfg):
 def test_invalid_save_as_rejected_up_front(tmp_path, cfg):
     with pytest.raises(ValueError):
         Runner("a", FakeTarget([page()]), "g", None, cfg, save_as="!!!", store=FlowStore(tmp_path))
+
+
+def test_signature_ignores_synthetic_webview_links():
+    from jev_runner.flows import element_labels
+    page = {"url": "p/A", "actions": [
+        {"id": "n0", "node": 0, "kind": "click", "label": "Ingresar", "role": "button"},
+        {"id": "n1", "node": 1, "kind": "click", "label": "Su sesión expira en 4:59",
+         "role": "link", "synthetic": True},
+    ]}
+    assert element_labels(page) == ["Ingresar"]

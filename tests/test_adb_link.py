@@ -329,7 +329,7 @@ def test_relay_main_busy_port_exits_nonzero_without_ready():
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, text=True)
         assert proc.stdout.read() == ""
-        assert proc.wait(timeout=5) == 2
+        assert proc.wait(timeout=5) == 73  # distinct from CPython's own exit 2
     finally:
         blocker.close()
 
@@ -434,7 +434,7 @@ def test_close_terminates_helper(fake_adb, cfg_android):
 
 def test_helper_bind_failure_reports_busy(fake_adb, fake_clock, cfg_android):
     popen = FakePopen()
-    popen.ready, popen.code = False, 2
+    popen.ready, popen.code = False, 73
     link = _wireless_link(fake_adb, cfg_android, popen, iter(lambda: "192.168.1.215", None),
                           sleep=fake_clock.sleep, clock=fake_clock.now)
     with pytest.raises(DeviceDisconnected, match="busy"):
@@ -510,3 +510,14 @@ def test_tcpip_wait_is_bounded(fake_adb, fake_clock, cfg_android):
         link.ensure_connected()
     # the post-tcpip poll gave up after <=5 s; the next attempt went on to wireless
     assert resolved_at and resolved_at[0] <= 6.5
+
+
+def test_helper_exit_2_is_not_reported_busy(fake_adb, fake_clock, cfg_android):
+    # CPython exits 2 when it can't open the script: not a busy port
+    popen = FakePopen()
+    popen.ready, popen.code = False, 2
+    link = _wireless_link(fake_adb, cfg_android, popen, iter(lambda: "192.168.1.215", None),
+                          sleep=fake_clock.sleep, clock=fake_clock.now)
+    with pytest.raises(DeviceDisconnected) as e:
+        link.ensure_connected()
+    assert "busy" not in str(e.value)
