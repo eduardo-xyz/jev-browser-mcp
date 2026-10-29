@@ -1,15 +1,19 @@
 """Runner: per tick observe -> scrub -> decide -> act -> record."""
+import re
 import time
 
 from jev_ultrafast import model
 
 from . import result
 from .config import Config
-from .guards import is_secret_field, scrub
+from .guards import check_money, is_money_action, is_secret_field, scrub
 from .targets.base import DeviceDisconnected, StalePage, Target, TargetBlocked
 
 UNREADABLE_TRIES = 3
 NO_PROGRESS = 3
+MONEY_KEYS = ("amount", "recipient")
+REFERENCE_RE = re.compile(
+    r"(?i)(referencia|comprobante|n[uú]mero de (transacci[oó]n|referencia)|reference)\D{0,20}(\d{4,})")
 
 
 def goal_text(goal: str, params: dict | None) -> str:
@@ -26,12 +30,27 @@ def element_labels(page: dict) -> list[str]:
     return sorted(a["label"] for a in page.get("actions", []) if "node" in a)
 
 
+def locator_of(action: dict) -> dict:
+    if "node" in action:
+        return {k: action.get(k) for k in ("kind", "resource_id", "label", "role")}
+    return {"control": action["id"]}
+
+
+def find_by_locator(page: dict, locator: dict) -> dict | None:
+    """resource_id when non-empty, else label+role+kind."""
+    actions = page.get("actions", [])
+    if "control" in locator:
+        return next((a for a in actions if a["id"] == locator["control"]), None)
+    if locator.get("resource_id"):
+        return next((a for a in actions if "node" in a
+                     and a.get("resource_id") == locator["resource_id"]), None)
+    return next((a for a in actions if "node" in a and all(
+        a.get(k) == locator.get(k) for k in ("label", "role", "kind"))), None)
+
+
 def history_entry(action: dict, page: dict, text: str | None, secret_patterns: list[str] | None = None) -> dict:
     """Replay-ready record of one executed action (Task 5 fills value_source)."""
-    if "node" in action:
-        locator = {k: action.get(k) for k in ("kind", "resource_id", "label", "role")}
-    else:
-        locator = {"control": action["id"]}
+    locator = locator_of(action)
     return {
         "action": action["label"],
         "kind": action["kind"],
@@ -72,10 +91,29 @@ class Runner:
 
     def run(self) -> dict:
         if not self.status.startswith("paused"):
-            self.pending, self.receipt = None, None
+            self.pending, self.receipt, self.executed_money = None, None, False
+        return self._drive()
+
+    def resume(self, input: str | None = None, instruction: str | None = None,
+               confirm: bool = False) -> dict:
+        """Continue a paused run. Never lets a secret value reach a result."""
+        if instruction:
+            self.goal += "\n" + instruction
+        pending = self.pending
+        if pending is None:
+            return self.run()
+        if pending["type"] == "secret" and input is None:
+            return result.build(self)
+        if pending["type"] == "money" and not confirm:
+            return result.build(self)
+        return self._drive(lambda: self._resume_pending(pending, input))
+
+    def _drive(self, first=None) -> dict:
         self.status, self.reason = "running", None
         self._started = time.perf_counter()
         try:
+            if first is not None:
+                first()
             while self.status == "running":
                 self._tick()
         except _Stop as s:
@@ -87,10 +125,30 @@ class Runner:
         except StalePage:
             self.status, self.reason = "error", "stale_page"
         except Exception as e:  # provider/target failures end the run, never escape
-            self.status, self.reason = "error", (str(e) or type(e).__name__)[:200]
+            msg = scrub({"text": str(e) or type(e).__name__}, self.secrets)["text"]
+            self.status, self.reason = "error", msg[:200]
         finally:
             self._touch()
         return result.build(self)
+
+    def _resume_pending(self, pending: dict, input: str | None):
+        status = "paused_needs_input" if pending["type"] == "secret" else "paused_mismatch"
+        self.page = {}  # force a real re-observe: the screen may have moved while paused
+        page = self._observe()
+        action = find_by_locator(page, pending["locator"])
+        if action is None:
+            raise _Stop(status, "pending_element_missing")
+        if pending["type"] == "secret":
+            self._execute(action, page, input, verify=True, secret=True)
+            self.pending = None
+            return
+        if page.get("fingerprint") != pending.get("fingerprint"):
+            # Screen changed since the human looked at it: their confirm no longer applies.
+            self._guard_money(action, page, self._money_params())
+            return
+        self._execute(action, page, None, verify=True)
+        self.executed_money = True
+        self.pending = None
 
     def _touch(self):
         self.last_used = time.time()
@@ -138,15 +196,56 @@ class Runner:
         self.model_calls += 1
         return self._choose(view, self.goal, self.history)
 
+    def _money_params(self) -> dict:
+        keys = set(MONEY_KEYS) | set(self.money_params)
+        return {k: v for k, v in (self.params or {}).items() if k in keys}
+
+    def _guard_money(self, action: dict, page: dict, money_params: dict):
+        """Tap autonomously only on an exact on-screen match; otherwise pause."""
+        check = check_money(page.get("text") or "", money_params, self.cfg.own_accounts)
+        if money_params and check.ok:
+            self._execute(action, page, None, verify=True)
+            self.executed_money = True
+            return
+        self.pending = {"type": "money", "locator": locator_of(action),
+                        "fingerprint": page.get("fingerprint"),
+                        "expected": check.expected, "seen": check.seen}
+        raise _Stop("paused_mismatch")
+
+    def _save_receipt(self, page: dict):
+        text = scrub(page, self.secrets).get("text") or ""
+        m = REFERENCE_RE.search(text)
+        ref = m.group(3) if m else None
+        path = None
+        try:
+            folder = self.cfg.data_dir / "receipts"
+            folder.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            path = str(self.target.screenshot(folder / f"{self.session_id}-{ts}.png"))
+        except Exception:  # a failed screenshot must not turn a completed transfer into an error
+            path = None
+        self.receipt = {"path": path, "reference": ref}
+
     def _act_and_record(self, decision: dict, page: dict):
         choice = decision["choice"]
         if choice == "DONE":
+            if self.executed_money:
+                self._save_receipt(page)
             raise _Stop("done")
         if choice == "BLOCKED":
             raise _Stop("blocked", "jev_blocked")
         action = next((a for a in page["actions"] if a["id"] == choice), None)
         if action is None:
             raise _Stop("error", "unknown_action")
+        if is_secret_field(action, self.cfg.secret_patterns):
+            # Secrets never go to the text model: ask the human instead.
+            self.pending = {"type": "secret", "locator": locator_of(action),
+                            "field": action["label"]}
+            raise _Stop("paused_needs_input")
+        money_params = self._money_params()
+        if is_money_action(action, page, money_params, self.cfg):
+            self._guard_money(action, page, money_params)
+            return
         text = None
         if action["kind"] == "fill":
             ctx = model.field_context(self.goal, action, scrub(page, self.secrets), self.history)
@@ -154,12 +253,23 @@ class Runner:
                 text, _ = self._field_text(ctx)
             except ValueError:
                 raise _Stop("blocked", "missing_value")
-        self.target.act(action, page, text=text)
+        self._execute(action, page, text)
+
+    def _execute(self, action: dict, page: dict, text: str | None, *,
+                 verify: bool = False, secret: bool = False):
+        if secret and text:
+            self.secrets.append(text)  # before acting, so even a target error is scrubbed
+        if verify:
+            self.target.act(action, page, text=text, verify=True)
+        else:
+            self.target.act(action, page, text=text)
         # From here the action has executed: nothing below may trigger the pre-act retry path.
         self._stale = 0
         entry = history_entry(action, page, text, self.cfg.secret_patterns)
-        if text is not None and entry["text"] == "•••":
-            self.secrets.append(text)
+        if text is not None and (secret or entry["text"] == "•••"):
+            entry["text"] = "•••"
+            if text not in self.secrets:
+                self.secrets.append(text)
         self.history.append(entry)
         try:
             self.page = after = self.target.observe()

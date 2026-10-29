@@ -1,4 +1,11 @@
-from jev_mcp.guards import check_money, is_money_action, is_secret_field, parse_amount, scrub
+from jev_mcp.config import Config
+from jev_mcp.guards import (
+    check_money,
+    is_money_action,
+    is_secret_field,
+    parse_amount,
+    scrub,
+)
 
 
 def test_amount_formats_match():
@@ -25,7 +32,8 @@ def test_recipient_name_accent_and_case_insensitive():
     assert check_money("Para: JUAN PÉREZ  ₡150.000", {"amount": 150000, "recipient": "juan perez"}).ok
 
 
-def test_money_label_exact_after_normalization(cfg):
+def test_money_label_exact_after_normalization():
+    cfg = Config(money_apps=["net.bac.sbe.android"])
     page = {"url": "net.bac.sbe.android/x", "text": ""}
     click = lambda label: {"kind": "click", "label": label}
     assert is_money_action(click("TRANSFERIR"), page, {}, cfg)
@@ -74,7 +82,8 @@ def test_check_money_fails_closed_on_missing_keys():
     assert not check_money("Juan Perez 150000", {}).ok
 
 
-def test_money_label_prefix_and_exclusions(cfg):
+def test_money_label_prefix_and_exclusions():
+    cfg = Config(money_apps=["net.bac.sbe.android"])
     page = {"url": "net.bac.sbe.android/x", "text": ""}
     click = lambda label: {"kind": "click", "label": label}
     for label in ["Confirmar transferencia", "Transferir ahora", "Pagar ₡150.000"]:
@@ -100,3 +109,11 @@ def test_parse_amount_rejects_bool_and_nonfinite():
 def test_scrub_title_url_and_no_actions_key():
     out = scrub({"url": "x/482913", "title": "t 482913", "text": "a"}, ["482913"])
     assert "482913" not in str(out) and "actions" not in out
+
+
+def test_no_app_guarded_by_default():
+    cfg = Config()
+    assert cfg.money_apps == []
+    page = {"url": "net.bac.sbe.android/x", "text": ""}
+    assert not is_money_action({"kind": "click", "label": "Transferir"}, page, {}, cfg)
+    assert is_money_action({"kind": "click", "label": "Transferir"}, page, {"amount": 5}, cfg)

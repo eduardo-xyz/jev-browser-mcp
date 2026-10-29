@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from jev_mcp import runner as runner_mod
 from jev_mcp.runner import Runner
 from jev_mcp.targets.base import DeviceDisconnected
@@ -77,8 +79,9 @@ def test_secret_fill_is_masked_everywhere(cfg):
     spy = []
     t = FakeTarget([page(fill("n1", "Código BAC")), page(click("n2", "Ok")), page()])
     r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1", "n2", "DONE"], spy),
-               field_text=lambda ctx: ("482913", {}))
-    out = r.run()
+               field_text=lambda ctx: pytest.fail("secret must never reach the text model"))
+    assert r.run()["status"] == "paused_needs_input"
+    out = r.resume(input="482913")
     assert r.history[0]["text"] == "•••"
     assert "482913" not in json.dumps(out)
     assert all("482913" not in s for s in spy)

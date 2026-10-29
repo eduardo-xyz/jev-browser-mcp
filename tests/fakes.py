@@ -1,8 +1,11 @@
 """Offline fakes: a scripted Target and a scripted Jev `choose`."""
+import itertools
 import json
 from pathlib import Path
 
 from jev_mcp.targets.base import StalePage  # noqa: F401
+
+_seq = itertools.count()
 
 
 def fill(id, label):
@@ -13,10 +16,10 @@ def click(id, label):
     return {"id": id, "node": id, "kind": "click", "label": label, "role": "button"}
 
 
-def page(*actions, url="app://main", readable=True):
+def page(*actions, url="app://main", readable=True, text=""):
     labels = ",".join(a["label"] for a in actions)
-    return {"url": url, "title": "t", "text": "", "actions": list(actions),
-            "fingerprint": f"{url}|{labels}|{id(actions)}", "readable": readable}
+    return {"url": url, "title": "t", "text": text, "actions": list(actions),
+            "fingerprint": f"{url}|{labels}|{next(_seq)}", "readable": readable}
 
 
 def unreadable():

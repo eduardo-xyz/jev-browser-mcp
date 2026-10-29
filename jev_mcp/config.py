@@ -18,7 +18,7 @@ class Config:
     android_ip: str | None = None
     adb_tcp_port: int = 5555
     relay_port: int = 5556
-    money_apps: list[str] = field(default_factory=lambda: ["net.bac.sbe.android"])
+    money_apps: list[str] = field(default_factory=list)  # opt-in via config.toml; nothing app-specific
     money_labels: list[str] = field(default_factory=lambda: [
         "Transferir", "Pagar", "Confirmar", "Confirmar pago", "Enviar",
         "Pay", "Send", "Transfer", "Confirm",
