@@ -45,9 +45,18 @@ class Config:
     data_dir: Path = field(default_factory=data_dir)
 
 
+LIST_FIELDS = ("money_apps", "money_labels", "money_labels_contextual",
+               "money_exclude_words", "secret_patterns", "own_accounts")
+
+
 def load() -> Config:
     base = data_dir()
     path = base / "config.toml"
     values = tomllib.loads(path.read_text()) if path.exists() else {}
     known = {f.name for f in fields(Config)} - {"data_dir"}
+    for key in LIST_FIELDS:
+        # fail closed: a mistyped guard list must not silently disable a guard
+        v = values.get(key)
+        if key in values and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+            raise ValueError(f"config.toml: {key} must be a list of strings")
     return Config(data_dir=base, **{k: v for k, v in values.items() if k in known})
