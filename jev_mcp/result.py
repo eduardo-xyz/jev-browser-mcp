@@ -28,4 +28,9 @@ def build(runner) -> dict:
     flow_saved = getattr(runner, "flow_saved", None)
     if flow_saved:
         out["flow_saved"] = flow_saved
+    if getattr(runner, "flow_updated", None):
+        out["flow_updated"] = runner.flow_updated
+    flow = getattr(runner, "flow", None)
+    if flow is not None:
+        out["flow_used"] = flow.name
     return out

@@ -10,6 +10,7 @@ from .config import Config
 from .flows import (
     Flow,
     FlowStore,
+    auto_name,
     element_labels,
     find_by_locator,
     flow_from_history,
@@ -78,7 +79,7 @@ class Runner:
                  cfg: Config, *, max_steps: int = 40, money_params: list[str] | None = None,
                  flow: Flow | None = None, save_as: str | None = None,
                  store: FlowStore | None = None, start: str | None = None,
-                 choose=model.choose, field_text=model.field_text):
+                 learn: bool = True, choose=model.choose, field_text=model.field_text):
         self.session_id, self.target, self.params, self.cfg = session_id, target, params, cfg
         self.goal = goal_text(goal, params)
         self._goal_raw = goal  # saved flows keep the goal without this run's values
@@ -90,7 +91,10 @@ class Runner:
         self.save_as, self.store, self.start = save_as, store, start
         self.flow_i = 0  # next recorded step expected when replaying `flow`
         self._resyncing = False  # Jev decided during a flow: look ahead to resync
+        self.learn = learn
         self.flow_saved: str | None = None
+        self.flow_updated: str | None = None
+        self._jev_steps = 0  # actions decided by Jev (not replayed)
         self._choose, self._field_text = choose, field_text
         self.status, self.reason = "running", None
         self.history: list[dict] = []
@@ -160,14 +164,25 @@ class Runner:
         return result.build(self)
 
     def _save_flow(self):
-        if not (self.save_as and self.store) or self.flow_saved:
+        if not self.store or self.flow_saved or self.flow_updated:
             return
+        start = self.start or (self.history[0]["where"] if self.history else None)
+        if self.save_as:
+            name, start, goal, healing = self.save_as, start, self._goal_raw, False
+        elif not self.learn or not self._jev_steps:
+            return
+        elif self.flow is None:
+            name, goal, healing = auto_name(self.target.kind, start, self._goal_raw), self._goal_raw, False
+        else:
+            name, start, goal, healing = self.flow.name, self.flow.start, self.flow.goal, True
         try:
-            start = self.start or (self.history[0]["where"] if self.history else None)
-            flow = flow_from_history(self.save_as, self.target.kind, start, self._goal_raw,
+            flow = flow_from_history(name, self.target.kind, start, goal,
                                      self.params or {}, self.money_params, self.history)
             self.store.save(self._scrub_flow(flow))
-            self.flow_saved = self.save_as
+            if healing:
+                self.flow_updated = name
+            else:
+                self.flow_saved = name
         except Exception:  # a failed save must not undo a finished run
             self.reason = "flow_save_failed"
 
@@ -360,6 +375,7 @@ class Runner:
         action = next((a for a in page["actions"] if a["id"] == choice), None)
         if action is None:
             raise _Stop("error", "unknown_action")
+        self._jev_steps += 1
         self._dispatch(action, page, lambda: self._model_text(action, page))
 
     def _dispatch(self, action: dict, page: dict, text_for):

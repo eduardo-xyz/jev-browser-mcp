@@ -2,9 +2,14 @@
 import json
 import os
 import re
+import time
 import unicodedata
 from dataclasses import asdict, dataclass, field
+from hashlib import sha1
 from pathlib import Path
+from urllib.parse import urlparse
+
+from .guards import normalize
 
 MATCH_THRESHOLD = 0.8
 SECRET_MARK = "•••"
@@ -19,6 +24,7 @@ class Flow:
     params: list[str] = field(default_factory=list)
     money_params: list[str] = field(default_factory=list)
     steps: list[dict] = field(default_factory=list)
+    updated_at: float = 0.0
 
 
 def slug(name: str) -> str:
@@ -28,6 +34,25 @@ def slug(name: str) -> str:
     if not s:
         raise ValueError("flow name must contain letters or digits")
     return s
+
+
+def goal_key(goal: str) -> str:
+    """Normalized goal with digit runs removed: runs differing only in numbers share a key."""
+    return " ".join(re.sub(r"\d+", " ", normalize(goal)).split())
+
+
+def start_key(start: str | None) -> str | None:
+    """Package or host of a start: 'pkg/.Activity' -> 'pkg'; 'https://h/p' -> 'h'."""
+    if not start:
+        return None
+    if "://" in start:
+        return urlparse(start).netloc.lower() or start
+    return start.split("/", 1)[0]
+
+
+def auto_name(target: str, start: str | None, goal: str) -> str:
+    base = slug(f"{target} {start_key(start) or ''}")[:40]
+    return "auto-" + base + "-" + sha1(goal_key(goal).encode()).hexdigest()[:8]
 
 
 class FlowStore:
@@ -42,6 +67,7 @@ class FlowStore:
     def save(self, flow: Flow) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
         path = self._path(flow.name)
+        flow.updated_at = time.time()
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(asdict(flow), ensure_ascii=False, indent=2))
         os.replace(tmp, path)  # atomic: a crash never leaves a half-written flow
@@ -55,6 +81,24 @@ class FlowStore:
         if not path.exists():
             raise KeyError(name)
         return Flow(**json.loads(path.read_text()))
+
+    def find(self, target: str, start: str | None, goal: str) -> "Flow | None":
+        """Most recently saved flow for this target, start (package/host) and goal shape."""
+        if not self.root.exists():
+            return None
+        want, best = goal_key(goal), None
+        for path in self.root.glob("*.json"):
+            try:
+                flow = Flow(**json.loads(path.read_text()))
+            except (OSError, ValueError, TypeError):
+                continue
+            if flow.target != target or goal_key(flow.goal) != want:
+                continue
+            if start is not None and start_key(flow.start) != start_key(start):
+                continue
+            if best is None or flow.updated_at > best.updated_at:
+                best = flow
+        return best
 
     def list(self) -> list[dict]:
         if not self.root.exists():
