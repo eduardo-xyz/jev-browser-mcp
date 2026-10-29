@@ -17,7 +17,7 @@ def test_runs_to_done_and_returns_compact_result(cfg):
     assert out["last_actions"] == ["fill · Monto = 5", "click · Siguiente"]
     assert len(json.dumps(out)) < 2048 and "screenshot" not in json.dumps(out)
     h = r.history[0]
-    assert h["where"] == "app://main" and h["value_source"] is None
+    assert h["where"] == "app://main" and h["value_source"] == "param:amount"
     assert h["locator"]["label"] == "Monto" and h["signature"]["labels"] == ["Monto"]
 
 

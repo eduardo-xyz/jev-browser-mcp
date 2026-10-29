@@ -8,12 +8,18 @@ from jev_mcp.targets.base import StalePage  # noqa: F401
 _seq = itertools.count()
 
 
-def fill(id, label):
-    return {"id": id, "node": id, "kind": "fill", "label": label, "role": "textbox", "value": ""}
+def fill(id, label, rid=None):
+    a = {"id": id, "node": id, "kind": "fill", "label": label, "role": "textbox", "value": ""}
+    if rid is not None:
+        a["resource_id"] = rid
+    return a
 
 
-def click(id, label):
-    return {"id": id, "node": id, "kind": "click", "label": label, "role": "button"}
+def click(id, label, rid=None):
+    a = {"id": id, "node": id, "kind": "click", "label": label, "role": "button"}
+    if rid is not None:
+        a["resource_id"] = rid
+    return a
 
 
 def page(*actions, url="app://main", readable=True, text=""):

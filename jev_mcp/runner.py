@@ -7,6 +7,16 @@ from jev_ultrafast import model
 
 from . import result
 from .config import Config
+from .flows import (
+    Flow,
+    FlowStore,
+    element_labels,
+    find_by_locator,
+    flow_from_history,
+    locate,
+    matches,
+    value_source,
+)
 from .guards import (
     check_money,
     is_money_action,
@@ -21,6 +31,7 @@ UNREADABLE_TRIES = 3
 NO_PROGRESS = 3
 MONEY_KEYS = ("amount", "recipient")
 ESCAPABLE = ("pending_element_missing", "pending_element_ambiguous")
+RESYNC_WINDOW = 3  # after a Jev fallback, look this many recorded steps ahead
 REFERENCE_RE = re.compile(
     r"(?i)(referencia|comprobante|n[uú]mero de (transacci[oó]n|referencia)|reference)\D{0,20}(\d{4,})")
 
@@ -35,29 +46,14 @@ def goal_text(goal: str, params: dict | None) -> str:
     return f"{goal}\nValues: {vals}"
 
 
-def element_labels(page: dict) -> list[str]:
-    return sorted(a["label"] for a in page.get("actions", []) if "node" in a)
-
-
 def locator_of(action: dict) -> dict:
     if "node" in action:
         return {k: action.get(k) for k in ("kind", "resource_id", "label", "role")}
     return {"control": action["id"]}
 
 
-def find_by_locator(page: dict, locator: dict) -> list[dict]:
-    """All matches: resource_id when non-empty, else label+role+kind."""
-    actions = page.get("actions", [])
-    if "control" in locator:
-        return [a for a in actions if a["id"] == locator["control"]]
-    if locator.get("resource_id"):
-        return [a for a in actions if "node" in a and a.get("resource_id") == locator["resource_id"]]
-    return [a for a in actions if "node" in a and all(
-        a.get(k) == locator.get(k) for k in ("label", "role", "kind"))]
-
-
 def history_entry(action: dict, page: dict, text: str | None, secret_patterns: list[str] | None = None) -> dict:
-    """Replay-ready record of one executed action (Task 5 fills value_source)."""
+    """Replay-ready record of one executed action (the runner fills value_source)."""
     locator = locator_of(action)
     return {
         "action": action["label"],
@@ -79,10 +75,16 @@ class _Stop(Exception):
 class Runner:
     def __init__(self, session_id: str, target: Target, goal: str, params: dict | None,
                  cfg: Config, *, max_steps: int = 40, money_params: list[str] | None = None,
-                 flow=None, choose=model.choose, field_text=model.field_text):
+                 flow: Flow | None = None, save_as: str | None = None,
+                 store: FlowStore | None = None, start: str | None = None,
+                 choose=model.choose, field_text=model.field_text):
         self.session_id, self.target, self.params, self.cfg = session_id, target, params, cfg
         self.goal = goal_text(goal, params)
+        self._goal_raw = goal  # saved flows keep the goal without this run's values
         self.max_steps, self.money_params, self.flow = max_steps, money_params or [], flow
+        self.save_as, self.store, self.start = save_as, store, start
+        self.flow_i = 0  # next recorded step expected when replaying `flow`
+        self.flow_saved: str | None = None
         self._choose, self._field_text = choose, field_text
         self.status, self.reason = "running", None
         self.history: list[dict] = []
@@ -147,7 +149,33 @@ class Runner:
             self.status, self.reason = "error", msg[:200]
         finally:
             self._touch()
+        if self.status == "done":
+            self._save_flow()
         return result.build(self)
+
+    def _save_flow(self):
+        if not (self.save_as and self.store) or self.flow_saved:
+            return
+        try:
+            start = self.start or (self.history[0]["where"] if self.history else None)
+            flow = flow_from_history(self.save_as, self.target.kind, start, self._goal_raw,
+                                     self.params or {}, self.money_params, self.history)
+            self.store.save(self._scrub_flow(flow))
+            self.flow_saved = self.save_as
+        except Exception:  # a failed save must not undo a finished run
+            self.reason = "flow_save_failed"
+
+    def _scrub_flow(self, flow: Flow) -> Flow:
+        """Belt and braces: no typed secret may reach a flow file, even inside a literal."""
+        for step in flow.steps:
+            step["signature"] = scrub_value(step["signature"], self.secrets)
+            step["locator"] = scrub_value(step["locator"], self.secrets)
+            v = step["value"]
+            if isinstance(v, str) and scrub_text(v, self.secrets) != v:
+                step["value"] = "secret"
+        flow.start = scrub_value(flow.start, self.secrets)
+        flow.goal = scrub_text(flow.goal, self.secrets)
+        return flow
 
     def _resume_pending(self, pending: dict, input: str | None):
         status = "paused_needs_input" if pending["type"] == "secret" else "paused_mismatch"
@@ -199,10 +227,13 @@ class Runner:
         if self._no_progress():
             raise _Stop("blocked", "no_progress")
         page = self._observe()
-        view = scrub(page, self.secrets)
-        decision = self._decide(view)
+        replay = self._match_flow(page)
+        decision = None if replay else self._decide(scrub(page, self.secrets))
         try:
-            self._act_and_record(decision, page)
+            if replay:
+                self._replay(*replay, page)
+            else:
+                self._act_and_record(decision, page)
         except StalePage:
             self._stale += 1
             self.page = {}
@@ -232,6 +263,50 @@ class Runner:
     def _decide(self, view: dict) -> dict:
         self.model_calls += 1
         return self._choose(view, self.goal, self.history)
+
+    # --- replay: recorded steps stand in for `choose`; every guard still applies ---
+    def _match_flow(self, page: dict) -> tuple[int, dict, dict] | None:
+        """First recorded step in the window whose screen matches, if it can be replayed."""
+        if self.flow is None:
+            return None
+        steps = self.flow.steps
+        for j in range(self.flow_i, min(self.flow_i + RESYNC_WINDOW, len(steps))):
+            step = steps[j]
+            if not matches(step["signature"], page):
+                continue
+            action = locate(step["locator"], page)
+            if action is None or not self._replayable(step, action):
+                return None  # this screen is the expected one but differs: let Jev decide
+            return j, step, action
+        return None
+
+    def _replayable(self, step: dict, action: dict) -> bool:
+        kind = step["locator"].get("kind")
+        if kind is not None and action.get("kind") != kind:
+            return False
+        if action.get("kind") != "fill":
+            return True
+        value = step.get("value") or ""
+        if value.startswith("param:"):
+            return value[len("param:"):] in (self.params or {})
+        return value == "secret" or value.startswith("literal:")
+
+    def _replay(self, j: int, step: dict, action: dict, page: dict):
+        self.flow_i = j + 1  # a pause (secret/money) consumes the step; resume executes it
+        if step.get("value") == "secret" and action.get("kind") == "fill":
+            self.pending = self._pending_for("secret", action, page, field=action["label"])
+            raise _Stop("paused_needs_input")
+        try:
+            self._dispatch(action, page, lambda: self._step_text(step))
+        except StalePage:
+            self.flow_i = j  # refused before acting: retry this step on the fresh screen
+            raise
+
+    def _step_text(self, step: dict) -> str:
+        value = step["value"]
+        if value.startswith("param:"):
+            return str(self.params[value[len("param:"):]])
+        return value[len("literal:"):]
 
     def _money_params(self) -> dict:
         keys = set(MONEY_KEYS) | set(self.money_params)
@@ -275,6 +350,10 @@ class Runner:
         action = next((a for a in page["actions"] if a["id"] == choice), None)
         if action is None:
             raise _Stop("error", "unknown_action")
+        self._dispatch(action, page, lambda: self._model_text(action, page))
+
+    def _dispatch(self, action: dict, page: dict, text_for):
+        """Shared by Jev-chosen and replayed actions: secret and money guards first."""
         if is_secret_field(action, self.cfg.secret_patterns):
             # Secrets never go to the text model: ask the human instead.
             self.pending = self._pending_for("secret", action, page, field=action["label"])
@@ -283,14 +362,16 @@ class Runner:
         if is_money_action(action, page, money_params, self.cfg):
             self._guard_money(action, page, money_params)
             return
-        text = None
-        if action["kind"] == "fill":
-            ctx = model.field_context(self.goal, action, scrub(page, self.secrets), self.history)
-            try:
-                text, _ = self._field_text(ctx)
-            except ValueError:
-                raise _Stop("blocked", "missing_value")
+        text = text_for() if action["kind"] == "fill" else None
         self._execute(action, page, text)
+
+    def _model_text(self, action: dict, page: dict) -> str:
+        ctx = model.field_context(self.goal, action, scrub(page, self.secrets), self.history)
+        try:
+            text, _ = self._field_text(ctx)
+        except ValueError:
+            raise _Stop("blocked", "missing_value")
+        return text
 
     def _execute(self, action: dict, page: dict, text: str | None, *,
                  verify: bool = False, secret: bool = False, money: bool = False):
@@ -322,6 +403,7 @@ class Runner:
             entry["text"] = "•••"
             if text not in self.secrets:
                 self.secrets.append(text)
+        entry["value_source"] = value_source(text, self.params, secret=entry["text"] == "•••")
         self.history.append(entry)
         try:
             self.page = after = self.target.observe()
