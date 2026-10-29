@@ -27,13 +27,14 @@ def _connect(path: Path) -> socket.socket:
     return s
 
 
-def _spawn() -> None:
-    subprocess.Popen(
-        [sys.executable, "-m", "jev_mcp.daemon"],
-        cwd=REPO_ROOT,  # jev_mcp is imported from the repo, not an installed package
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True,  # survives the MCP server; inherits env (API keys)
-    )
+def _spawn(stderr_path: Path) -> None:
+    with open(stderr_path, "ab") as err:  # the child keeps its own copy of the fd
+        subprocess.Popen(
+            [sys.executable, "-m", "jev_mcp.daemon"],
+            cwd=REPO_ROOT,  # jev_mcp is imported from the repo, not an installed package
+            stdin=subprocess.DEVNULL, stdout=err, stderr=err,
+            start_new_session=True,  # survives the MCP server; inherits env (API keys)
+        )
 
 
 def _connect_or_start(path: Path) -> socket.socket:
@@ -41,7 +42,8 @@ def _connect_or_start(path: Path) -> socket.socket:
         return _connect(path)
     except (FileNotFoundError, ConnectionRefusedError):
         pass
-    _spawn()
+    stderr_path = path.parent / "jevd.stderr"
+    _spawn(stderr_path)
     deadline = time.monotonic() + START_TIMEOUT_S
     while True:
         try:
@@ -49,20 +51,28 @@ def _connect_or_start(path: Path) -> socket.socket:
         except (FileNotFoundError, ConnectionRefusedError):
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"jevd did not start within {START_TIMEOUT_S:g}s "
-                                   f"(see {path.parent / 'jevd.log'})") from None
+                                   f"(see {stderr_path} and {path.parent / 'jevd.log'})") from None
             time.sleep(POLL_S)
 
 
 def call(op: str, args: dict) -> dict:
     """Send one request; return its `result` or raise RuntimeError(error)."""
     path = _socket_path()
-    with _connect_or_start(path) as s:
-        s.sendall((json.dumps({"op": op, "args": args}) + "\n").encode())
-        with s.makefile("rb") as f:
-            line = f.readline()  # no timeout: a run can take minutes
+    try:
+        with _connect_or_start(path) as s:
+            s.sendall((json.dumps({"op": op, "args": args}) + "\n").encode())
+            with s.makefile("rb") as f:
+                line = f.readline()  # no timeout: a run can take minutes
+    except (ConnectionResetError, BrokenPipeError) as e:
+        raise RuntimeError(f"jevd connection lost: {type(e).__name__}") from None
     if not line:
         raise RuntimeError("jevd closed the connection without a response")
-    response = json.loads(line)
+    try:
+        response = json.loads(line)
+    except ValueError:
+        raise RuntimeError("jevd sent a malformed response") from None
+    if not isinstance(response, dict):
+        raise RuntimeError("jevd sent a malformed response")
     if not response.get("ok"):
         raise RuntimeError(response.get("error") or "jevd error")
     return response["result"]

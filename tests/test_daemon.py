@@ -113,7 +113,8 @@ def test_device_busy(daemon_with_fakes, keys):
     sid = first["result"]["session_id"]
     assert first["result"]["status"] == "paused_needs_input"
     second = run(daemon_with_fakes, target="android", goal="otp")
-    assert second == {"ok": False, "error": f"device_busy: {sid}"}
+    assert second == {"ok": False, "error": f"device_busy: {sid} (status=paused_needs_input; "
+                                            "pass session_id or end_session)"}
     assert daemon_with_fakes.targets_created == 1
     # a different device key is not locked, and chrome is never locked
     assert run(daemon_with_fakes, target="android", goal="otp", device="other")["ok"]
@@ -181,7 +182,10 @@ def test_base_exception_outside_money_is_an_error_not_a_crash(daemon_with_fakes,
     s.raise_once = KeyboardInterrupt()
     r = run(daemon_with_fakes, target="android", goal="go")
     assert not r["ok"] and "KeyboardInterrupt" in r["error"]
-    sid = daemon_with_fakes.handle({"op": "status", "args": {}})["result"]["sessions"][0]["session_id"]
+    listed = daemon_with_fakes.handle({"op": "status", "args": {}})["result"]["sessions"]
+    sid = listed[0]["session_id"]
+    assert listed[0]["status"] == "error"  # not a stale "running"
+    assert daemon_with_fakes.sessions[sid].runner.reason == "interrupted"
     s.choices = [["n1", "DONE"]]
     assert daemon_with_fakes.handle({"op": "resume", "args": {"session_id": sid}})["ok"]
 
@@ -378,3 +382,198 @@ def test_runner_construction_failure_frees_new_session(cfg, script, keys):
     r = run(d, target="android", goal="g")
     assert not r["ok"] and r["error"] == "internal_error: RuntimeError"
     assert d.sessions == {} and d.devices == {} and script.targets[0].closed
+
+
+def _uncertain_session(d):
+    s = d.script
+    s.pages = lambda: [page(click("n9", "Transferir"), text="Destino ****4066 Monto ₡150.000,00"), page()]
+    s.choices = [["n9", "DONE"]]
+    s.raise_always = KeyboardInterrupt()
+    r = run(d, target="android", goal="pay", params={"amount": 150000, "recipient": RECIPIENT})
+    assert r["result"]["reason"] == "money_action_uncertain"
+    s.raise_always = None
+    s.pages = otp_pages
+    s.choices = [["n1", "n2", "DONE"]]
+    return r["result"]["session_id"]
+
+
+def test_uncertain_session_is_terminal_for_run_task_and_reap(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    sid = _uncertain_session(d)
+    r = run(d, target="android", goal="pay again", session_id=sid)
+    assert r == {"ok": False,
+                 "error": "session_terminal: money_action_uncertain; verify manually, then end_session"}
+    r = run(d, target="android", goal="otp")
+    assert r == {"ok": False, "error": f"device_busy: {sid} (status=error; pass session_id or end_session)"}
+    assert d.reap(time.time() + 10_000) == []
+    assert not d.script.targets[0].closed
+    assert [x["session_id"] for x in d.handle({"op": "status", "args": {}})["result"]["sessions"]] == [sid]
+    assert d.handle({"op": "end_session", "args": {"session_id": sid}})["ok"]
+    assert run(d, target="android", goal="otp")["ok"]
+
+
+def test_settled_holder_is_reused_without_session_id(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    d.script.choices = [["DONE"], ["DONE"]]
+    sid = run(d, target="android", goal="a", url_or_app="com.app")["result"]["session_id"]
+    r = run(d, target="android", goal="b", url_or_app="com.app")
+    assert r["ok"] and r["result"]["session_id"] == sid and r["result"]["status"] == "done"
+    assert d.targets_created == 1
+    r = run(d, target="android", goal="c")  # no url_or_app: keep the warm target
+    assert r["result"]["session_id"] == sid and d.targets_created == 1
+
+
+def test_settled_error_holder_is_reused(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    s = d.script
+    s.pages = lambda: [page(click("n1", "Go")), page()]
+    s.choices = [["n1"], ["DONE"]]
+    s.raise_once = RuntimeError("boom")
+    r = run(d, target="android", goal="go")
+    sid = r["result"]["session_id"]
+    assert r["result"]["status"] == "error"
+    r = run(d, target="android", goal="go")
+    assert r["ok"] and r["result"]["session_id"] == sid and r["result"]["status"] == "done"
+
+
+def test_settled_holder_with_other_app_gets_a_fresh_target(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    d.script.choices = [["DONE"], ["DONE"]]
+    sid = run(d, target="android", goal="a", url_or_app="com.one")["result"]["session_id"]
+    r = run(d, target="android", goal="a", url_or_app="com.two")
+    assert r["ok"] and r["result"]["session_id"] != sid and d.targets_created == 2
+    assert d.script.targets[0].closed
+    assert sid not in d.sessions
+
+
+def test_settled_holder_without_runner_is_reused(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    sid = run(d, target="android", goal="otp")["result"]["session_id"]
+    d.sessions[sid].runner = None
+    r = run(d, target="android", goal="otp")
+    assert r["ok"] and r["result"]["session_id"] == sid
+
+
+def test_in_flight_holder_is_busy(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    d.script.choices = [["DONE"]]
+    sid = run(d, target="android", goal="a")["result"]["session_id"]
+    with d.sessions[sid].lock:  # simulate a call in flight
+        r = run(d, target="android", goal="b")
+    assert r == {"ok": False, "error": f"device_busy: {sid} (status=done; pass session_id or end_session)"}
+
+
+def test_resume_on_settled_runner_returns_last_result_without_acting(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    s = d.script
+    s.pages = lambda: [page(click("n9", "Transferir"), text="Destino ****4066 Monto ₡150.000,00"),
+                       page(text="Transferencia exitosa Referencia: 99887766")]
+    s.choices = [["n9", "DONE"]]
+    r = run(d, target="android", goal="pay", params={"amount": 150000, "recipient": RECIPIENT})
+    assert r["result"]["status"] == "done"
+    acted = list(s.targets[0].acted)
+    for args in ({}, {"confirm": True}, {"input": "123"}):
+        again = d.handle({"op": "resume", "args": {"session_id": r["result"]["session_id"], **args}})
+        assert again["ok"] and again["result"] == r["result"]
+    assert s.targets[0].acted == acted
+
+
+def test_missing_keys_message_mentions_restart(daemon_with_fakes, monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    r = run(daemon_with_fakes, target="android", goal="g")
+    assert "restart jevd after setting keys" in r["error"]
+
+
+def test_crash_logs_type_only(daemon_with_fakes, keys, caplog, monkeypatch):
+    caplog.set_level("DEBUG", logger="jevd")
+
+    def boom():
+        raise RuntimeError("secret-xyz")
+
+    monkeypatch.setattr(daemon_with_fakes.store, "list", boom)
+    r = daemon_with_fakes.handle({"op": "list_flows", "args": {}})
+    assert r == {"ok": False, "error": "internal_error: RuntimeError"}
+    assert "secret-xyz" not in caplog.text and "RuntimeError" in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_close_logs_busy_sessions(daemon_with_fakes, keys, caplog):
+    caplog.set_level("DEBUG", logger="jevd")
+    d = daemon_with_fakes
+    sid = run(d, target="android", goal="otp")["result"]["session_id"]
+    lock = d.sessions[sid].lock
+    lock.acquire()
+    try:
+        t0 = time.monotonic()
+        d.close()
+        assert time.monotonic() - t0 < 3
+    finally:
+        lock.release()
+    assert "busy" in caplog.text and sid in caplog.text
+    assert d.script.targets[0].closed
+
+
+def test_request_too_large_and_timeout(short_dir, monkeypatch):
+    monkeypatch.setattr(daemon, "REQUEST_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(daemon, "MAX_REQUEST_BYTES", 1000)
+    started = []
+    server, th = _start_server(started)
+    try:
+        path = str(short_dir / "jevd.sock")
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(path)
+        s.sendall(b"x" * 2000 + b"\n")
+        assert json.loads(s.makefile().readline()) == {"ok": False, "error": "request_too_large"}
+        s.close()
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(path)
+        s.settimeout(3)
+        resp = s.makefile().readline()  # sends nothing: the daemon gives up after the timeout
+        s.close()
+        assert resp == "" or json.loads(resp)["error"] == "request_timeout"
+        assert client.call("status", {})["sessions"] == []  # server still healthy
+    finally:
+        server.shutdown()
+        th.join(5)
+
+
+def _fake_server(path, reply):
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(path))
+    srv.listen(1)
+
+    def serve_one():
+        conn, _ = srv.accept()
+        conn.recv(65536)
+        if reply is None:
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+        else:
+            conn.sendall(reply)
+        conn.close()
+        srv.close()
+
+    th = threading.Thread(target=serve_one, daemon=True)
+    th.start()
+    return th
+
+
+@pytest.mark.parametrize("reply", [b"garbage\n", b"", None])
+def test_client_bad_replies_raise_runtime_error(short_dir, reply):
+    th = _fake_server(short_dir / "jevd.sock", reply)
+    with pytest.raises(RuntimeError):
+        client.call("status", {})
+    th.join(2)
+
+
+def test_client_spawn_logs_stderr_and_timeout_mentions_it(short_dir, monkeypatch):
+    seen = {}
+
+    def fake_popen(cmd, **kw):
+        seen.update(kw)
+        return object()
+
+    monkeypatch.setattr(client.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(client, "START_TIMEOUT_S", 0.2)
+    with pytest.raises(RuntimeError, match="jevd.stderr"):
+        client.call("status", {})
+    assert Path(seen["stderr"].name) == short_dir / "jevd.stderr"

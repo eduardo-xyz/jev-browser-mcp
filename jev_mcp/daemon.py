@@ -27,6 +27,11 @@ from .targets.base import DeviceDisconnected, TargetBlocked
 REQUIRED_ENV_VARS = ("TYPESAFE_API_KEY", "TEXT_MODEL_API_KEY")
 TARGETS = ("android", "chrome")
 REAP_EVERY_S = 60
+REQUEST_TIMEOUT_S = 30  # for reading the request line only, never for the run
+MAX_REQUEST_BYTES = 1_000_000
+CLOSE_WAIT_S = 1.0
+RESUMABLE_ERRORS = ("device_disconnected", "stale_page", "interrupted")
+TERMINAL_MSG = "session_terminal: money_action_uncertain; verify manually, then end_session"
 
 log = logging.getLogger("jevd")
 
@@ -53,6 +58,16 @@ class Session:
 
     def status(self) -> str:
         return self.runner.status if self.runner is not None else "idle"
+
+    def uncertain(self) -> bool:
+        return bool(getattr(self.runner, "_money_uncertain", False))
+
+    def settled(self) -> bool:
+        """No pause awaiting the caller, no run in progress, not money-uncertain."""
+        if self.runner is None:
+            return True
+        st = self.status()
+        return not (st.startswith("paused") or st == "running" or self.uncertain())
 
 
 class Daemon:
@@ -99,7 +114,7 @@ class Daemon:
             log.info("op=%s session=%s error=%s", op, sid, str(e)[:120])
             return {"ok": False, "error": str(e)}
         except BaseException as e:  # never let one request take the server thread down
-            log.exception("op=%s session=%s crashed: %s", op, sid, type(e).__name__)
+            log.error("op=%s session=%s crashed: %s", op, sid, type(e).__name__)
             return {"ok": False, "error": f"internal_error: {type(e).__name__}"}
         log.info("op=%s session=%s status=%s", op, out.get("session_id", sid), out.get("status", "ok"))
         return {"ok": True, "result": out}
@@ -121,6 +136,8 @@ class Daemon:
             log.warning("session=%s runner raised %s", session.session_id, type(e).__name__)
             if getattr(runner, "_money_uncertain", False):
                 return result.build(runner)  # terminal: report it, resume keeps returning it
+            if runner is not None:  # don't leave a stale "running" in status
+                runner.status, runner.reason, runner.pending = "error", "interrupted", None
             raise OpError(f"interrupted: {type(e).__name__}") from e
         finally:
             session.last_used = time.time()
@@ -147,7 +164,8 @@ class Daemon:
                     learn: bool = True) -> dict:
         missing = [name for name in REQUIRED_ENV_VARS if not os.environ.get(name)]
         if missing:
-            raise OpError(f"Missing required environment variable(s): {', '.join(missing)}")
+            raise OpError(f"Missing required environment variable(s): {', '.join(missing)} "
+                          "(restart jevd after setting keys)")
         if target not in TARGETS:
             raise OpError(f"unknown_target: {target}")
         explicit = None
@@ -162,34 +180,72 @@ class Daemon:
             except ValueError as e:
                 raise OpError(f"bad_args: save_as: {e}") from None
 
+        new = False
         if session_id is not None:
             session = self._get(session_id)
             if session.kind != target:
                 raise OpError(f"target_mismatch: session {session_id} is {session.kind}")
+            session.lock.acquire()
         else:
             if target == "chrome" and not url_or_app:
                 raise OpError("bad_args: chrome needs url_or_app")
-            session = self._open(target, url_or_app, device)
+            session, new = self._claim(target, url_or_app, device)  # returned locked
 
-        with session.lock:
+        try:
             if session.closed:
                 raise OpError("unknown_session")
+            if session.uncertain():
+                raise OpError(TERMINAL_MSG)
             start = url_or_app or session.start
             chosen = explicit
             if chosen is None and learn:
                 chosen = self.store.find(target, start, goal)
-            # A new run on an existing session gets a fresh Runner (new goal, new
-            # money budget); a terminal runner's own resume stays terminal.
+            # A new run on an existing session gets a fresh Runner (new goal); a
+            # money-uncertain session is terminal until end_session (checked above).
             try:
                 session.runner = self.runner_factory(
                     session.session_id, session.target, goal, params, self.cfg,
                     max_steps=max_steps, money_params=money_params, flow=chosen,
                     save_as=save_as, store=self.store, start=start, learn=learn)
             except BaseException:
-                if session_id is None:  # don't leave a runner-less session holding a device
+                if new:  # don't leave a runner-less session holding a device
                     self._close_session(session)
                 raise
             return self._drive(session, session.runner.run)
+        finally:
+            session.lock.release()
+
+    def _claim(self, target: str, url_or_app: str | None, device: str | None) -> tuple[Session, bool]:
+        """A locked session for a run without session_id: (session, created).
+
+        An android device held by a settled, idle session is reused (warm target),
+        unless a different app was asked for — then that session is replaced."""
+        key = (device or "default") if target == "android" else None
+        while key is not None:
+            with self._lock:
+                holder_id = self.devices.get(key)
+                if holder_id is None:
+                    break
+                holder = self.sessions.get(holder_id)
+                if holder is None:  # still connecting
+                    raise OpError(f"device_busy: {holder_id} (status=starting; "
+                                  "pass session_id or end_session)")
+                got = holder.lock.acquire(blocking=False)
+                if not (got and holder.settled()):
+                    if got:
+                        holder.lock.release()
+                    raise OpError(f"device_busy: {holder_id} (status={holder.status()}; "
+                                  "pass session_id or end_session)")
+            if not url_or_app or url_or_app == holder.start:
+                return holder, False
+            log.info("op=run_task session=%s replaced (other app)", holder_id)
+            try:
+                self._close_session(holder)
+            finally:
+                holder.lock.release()
+        session = self._open(target, url_or_app, device)
+        session.lock.acquire()  # fresh and unpublished to callers: never blocks
+        return session, True
 
     def _open(self, target: str, url_or_app: str | None, device: str | None) -> Session:
         sid = uuid4().hex[:8]
@@ -198,7 +254,8 @@ class Daemon:
             if key is not None:
                 holder = self.devices.get(key)
                 if holder is not None:
-                    raise OpError(f"device_busy: {holder}")
+                    raise OpError(f"device_busy: {holder} (status=starting; "
+                                  "pass session_id or end_session)")
                 self.devices[key] = sid  # reserve before the (slow) connect
         try:
             t = self.target_factory(target, url_or_app, device)
@@ -228,6 +285,11 @@ class Daemon:
             if session.runner is None:
                 raise OpError("no_run: call run_task with this session_id")
             runner = session.runner
+            if (runner.status != "running" and not runner.status.startswith("paused")
+                    and not runner._money_uncertain and not instruction
+                    and not (runner.status == "error" and runner.reason in RESUMABLE_ERRORS)):
+                # settled: report the last outcome (e.g. after a client disconnect), never act
+                return result.build(runner)
             return self._drive(session, lambda: runner.resume(
                 input=input, instruction=instruction, confirm=confirm))
 
@@ -289,6 +351,8 @@ class Daemon:
         for s in sessions:
             if now - s.idle_since() <= self.cfg.session_ttl_s:
                 continue
+            if s.uncertain():
+                continue  # money may have moved: kept until an explicit end_session
             if not s.lock.acquire(blocking=False):
                 continue  # a call is in flight
             try:
@@ -304,7 +368,15 @@ class Daemon:
         with self._lock:
             sessions = list(self.sessions.values())
         for s in sessions:
-            self._close_session(s)
+            got = s.lock.acquire(timeout=CLOSE_WAIT_S)
+            if not got:
+                log.warning("shutdown: session=%s busy (status=%s); closing its target anyway",
+                            s.session_id, s.status())
+            try:
+                self._close_session(s)
+            finally:
+                if got:
+                    s.lock.release()
         self.link.close()
 
 
@@ -314,16 +386,28 @@ def socket_path(cfg: Config) -> Path:
 
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
-        line = self.rfile.readline()
-        if not line:
+        self.connection.settimeout(REQUEST_TIMEOUT_S)
+        try:
+            line = self.rfile.readline(MAX_REQUEST_BYTES)
+        except TimeoutError:
+            response = {"ok": False, "error": "request_timeout"}
+        except OSError:
             return
-        try:
-            request = json.loads(line)
-        except ValueError:
-            response = {"ok": False, "error": "bad_request: not JSON"}
         else:
-            response = self.server.daemon.handle(request)
+            self.connection.settimeout(None)  # the run itself may take minutes
+            if not line:
+                return
+            if len(line) >= MAX_REQUEST_BYTES and not line.endswith(b"\n"):
+                response = {"ok": False, "error": "request_too_large"}
+            else:
+                try:
+                    request = json.loads(line)
+                except ValueError:
+                    response = {"ok": False, "error": "bad_request: not JSON"}
+                else:
+                    response = self.server.daemon.handle(request)
         try:
+            self.connection.settimeout(REQUEST_TIMEOUT_S)
             self.wfile.write((json.dumps(response, ensure_ascii=False) + "\n").encode())
         except OSError:
             pass  # client went away
