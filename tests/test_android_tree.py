@@ -76,3 +76,55 @@ def test_notification_nodes_only_when_shade_open():
     shown = parse_hierarchy(xml, "com.app", "Main", include_system_ui=True)
     assert not any(a.get("label") == "Wi-Fi" for a in hidden["actions"])
     assert any(a.get("label") == "Wi-Fi" for a in shown["actions"])
+
+
+def _clicks(p):
+    return {a["label"]: a for a in p["actions"] if a.get("kind") == "click"}
+
+
+def test_webview_plain_text_becomes_link_actions():
+    acts = _clicks(page())
+    for label in ("Tipo de Cambio", "Ubícanos", "Ayuda"):
+        a = acts[label]
+        assert a["role"] == "link" and a["kind"] == "click"
+    assert acts["Tipo de Cambio"]["bounds"] == [168, 2455, 409, 2495]
+
+
+def test_webview_text_under_clickable_ancestor_not_duplicated():
+    labels = [a["label"] for a in page()["actions"]]
+    assert labels.count("¿No puede ingresar?") == 1
+    assert labels.count("Ingresar") == 1
+
+
+def test_webview_links_have_unique_sequential_ids():
+    acts = [a for a in page()["actions"] if "bounds" in a]
+    assert [a["id"] for a in acts] == [f"n{i}" for i in range(len(acts))]
+
+
+def test_plain_text_outside_webview_not_actionable():
+    xml = (
+        '<hierarchy><node package="com.app" class="android.widget.FrameLayout" enabled="true"'
+        ' bounds="[0,0][1000,2000]"><node package="com.app" class="android.widget.TextView"'
+        ' text="Just a heading" enabled="true" bounds="[10,10][500,80]"/></node></hierarchy>'
+    )
+    p = parse_hierarchy(xml, "com.app", "Main")
+    assert not any(a.get("label") == "Just a heading" for a in p["actions"])
+
+
+def test_webview_skips_invisible_and_empty_text():
+    xml = (
+        '<hierarchy><node package="com.app" class="android.webkit.WebView" enabled="true"'
+        ' bounds="[0,0][1000,2000]">'
+        '<node package="com.app" class="android.widget.TextView" text="Hidden" enabled="true"'
+        ' visible-to-user="false" bounds="[10,10][500,80]"/>'
+        '<node package="com.app" class="android.widget.TextView" text="Zero" enabled="true"'
+        ' bounds="[10,10][10,80]"/>'
+        '<node package="com.app" class="android.widget.TextView" text="\ue001 " enabled="true"'
+        ' bounds="[10,100][500,180]"/>'
+        '<node package="com.app" class="android.widget.TextView" text="Shown" enabled="true"'
+        ' bounds="[10,200][500,280]"/>'
+        '</node></hierarchy>'
+    )
+    p = parse_hierarchy(xml, "com.app", "Main")
+    labels = [a["label"] for a in p["actions"] if "bounds" in a]
+    assert labels == ["Shown"]

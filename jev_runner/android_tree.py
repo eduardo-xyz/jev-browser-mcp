@@ -50,6 +50,7 @@ class _N:
         self.scrollable = a.get("scrollable") == "true"
         self.included = False
         self.children = []
+        self.parent = None
 
     def flag(self, k):
         return self.el.get(k) == "true"
@@ -61,9 +62,35 @@ def _walk(el, pkg, out):
     out.append(n)
     kids = []
     for c in el.findall("node"):
-        kids.append(_walk(c, pkg, out))
+        k = _walk(c, pkg, out)
+        k.parent = n
+        kids.append(k)
     n.children = kids
     return n
+
+
+def _is_webview(n):
+    return n.cls.endswith("WebView")
+
+
+def _clickable(n):
+    return n.flag("clickable") or n.flag("long-clickable") or n.flag("checkable")
+
+
+def _webview_link(n):
+    """Plain text inside a WebView with no clickable ancestor (below the WebView).
+
+    Web content often handles taps in JS on a non-clickable node (e.g. a footer menu
+    item), so uiautomator exposes it only as a TextView; offer it as a link.
+    """
+    if not (n.text or n.desc) or n.el.get("visible-to-user") == "false":
+        return False
+    p = n.parent
+    while p is not None and not _is_webview(p):
+        if _clickable(p):
+            return False  # its text is already part of the clickable ancestor's label
+        p = p.parent
+    return p is not None
 
 
 def _desc_text(n):
@@ -155,8 +182,10 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
             n.flag("enabled")
             and r > l
             and b > t
-            and (n.flag("clickable") or n.flag("long-clickable") or n.flag("checkable") or is_edit)
+            and (_clickable(n) or is_edit)
         )
+        link = (not actionable and n.flag("enabled") and r > l and b > t
+                and not _is_webview(n) and _webview_link(n))
         if actionable:
             tail = _rid_tail(n.rid)
             label = n.text or n.desc or n.hint or _desc_text(n)
@@ -187,6 +216,18 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
             if n.flag("checkable"):
                 act["checked"] = "true" if n.flag("checked") else "false"
             actions.append(act)
+        elif link:
+            actions.append({
+                "id": f"n{len(actions)}",
+                "node": len(actions),
+                "kind": "click",
+                "label": n.text or n.desc,
+                "role": "link",
+                "value": "",
+                "resource_id": n.rid,
+                "bounds": n.bounds,
+                "password": False,
+            })
         own = n.text or n.desc
         if own and not (actionable and is_edit):
             text_nodes.append((b, own, i))
