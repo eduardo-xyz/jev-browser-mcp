@@ -91,14 +91,14 @@ def test_failed_or_paused_runs_never_save(tmp_path, cfg):
     out = Runner("c", FakeTarget(pay_pages(5)), "x", None, cfg, store=store, max_steps=1,
                  choose=scripted_choose(["n1"]), field_text=text_amt).run()
     assert out["status"] == "max_steps"
-    assert not tmp_path.exists() or list(tmp_path.glob("*.json")) == []
+    assert list(tmp_path.glob("*.json")) == []
 
 
 def test_learn_false_disables_both(tmp_path, cfg):
     store = FlowStore(tmp_path)
     r1 = run_pay(store, cfg, 15000, ["n1", "n2", "DONE"], learn=False)
     assert r1["status"] == "done" and "flow_saved" not in r1
-    assert not tmp_path.exists() or list(tmp_path.glob("*.json")) == []
+    assert list(tmp_path.glob("*.json")) == []
     run_pay(store, cfg, 15000, ["n1", "n2", "DONE"])
     flow = store.find("android", START, "pay water bill 1")
     before = (tmp_path / f"{flow.name}.json").read_text()
@@ -131,3 +131,33 @@ def test_goal_key_ignores_numbers():
     assert goal_key("Pay water 15000") == goal_key("pay  water 16.000")
     assert auto_name("android", "com.x/.A", "pay 1") == auto_name("android", "com.x", "pay 22")
     assert auto_name("android", "com.x", "pay").startswith("auto-android-com-x-")
+
+
+def msg_pages():
+    return [page(fill("n1", "Numero", rid="num")), page(click("n2", "Enviar", rid="send")),
+            page(text="ok")]
+
+
+def run_msg(store, cfg, number, choices, flow=None, typed=None):
+    return Runner("m", FakeTarget(msg_pages()), f"send message to {number}", None, cfg, flow=flow,
+                  store=store, start=START, choose=scripted_choose(choices),
+                  field_text=lambda c: (typed or str(number), {})).run()
+
+
+def test_literal_number_not_in_new_goal_falls_back_to_jev_and_heals(tmp_path, cfg):
+    store = FlowStore(tmp_path)
+    r1 = run_msg(store, cfg, 88881111, ["n1", "n2", "DONE"])
+    flow = store.find("android", START, "send message to 99992222")
+    assert flow is not None and flow.steps[0]["value"] == "literal:88881111"
+    r2 = run_msg(store, cfg, 99992222, ["n1", "DONE"], flow=flow)
+    assert r2["status"] == "done" and r2["model_calls"] == 2
+    assert r2["flow_updated"] == r1["flow_saved"]
+    assert store.load(flow.name).steps[0]["value"] == "literal:99992222"
+
+
+def test_literal_number_present_in_new_goal_still_replays(tmp_path, cfg):
+    store = FlowStore(tmp_path)
+    run_msg(store, cfg, 88881111, ["n1", "n2", "DONE"])
+    flow = store.find("android", START, "send message to 88881111")
+    r = run_msg(store, cfg, 88881111, ["DONE"], flow=flow)
+    assert r["model_calls"] == 1 and "flow_updated" not in r

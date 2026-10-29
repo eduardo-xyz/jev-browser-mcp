@@ -314,7 +314,14 @@ class Runner:
         value = step.get("value") or ""
         if value.startswith("param:"):
             return value[len("param:"):] in (self.params or {})
-        return value == "secret" or value.startswith("literal:")
+        if value.startswith("literal:"):
+            return self._literal_current(value[len("literal:"):])
+        return value == "secret"
+
+    def _literal_current(self, text: str) -> bool:
+        """A recorded literal with a digit run absent from this run's goal/params is stale."""
+        known = self.goal + " " + " ".join(str(v) for v in (self.params or {}).values())
+        return all(run in known for run in re.findall(r"\d{3,}", text))
 
     def _replay(self, j: int, step: dict, action: dict, page: dict):
         self.flow_i = j + 1  # a pause (secret/money) consumes the step; resume executes it
