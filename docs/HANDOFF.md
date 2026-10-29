@@ -102,6 +102,13 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   BLOCKED instead of DONE (goals phrased as an action, not an end state, may end `blocked`). Android untested with real Jev.
 - Commit messages end with `Co-Authored-By:` attribution per the repo's convention; don't push or merge without Eduardo.
 
+- 2026-10-29 Android + real Jev (Redmi Pad, USB): WhatsApp self-message → `done` in 25 s, 7 model calls (flow saved).
+  Findings: (1) a goal naming only a first name sent a test message to the wrong contact — non-money sends have no
+  recipient check; goals must name the exact chat and say to stop otherwise. (2) DeepSeek refuses to type a value not
+  literally in the goal. (3) **False done + bad self-heal:** replaying the same goal while already in that chat, Jev
+  filled the message and said DONE without tapping Send (the identical earlier message was visible), and the flow was
+  `flow_updated` to that broken shorter version. Flow deleted; not yet fixed.
+
 ## Known residuals after final review (2026-10-29)
 
 Final whole-branch review + fix wave done (281 tests green). Open items, not yet fixed:
