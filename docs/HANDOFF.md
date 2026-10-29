@@ -19,7 +19,7 @@ Read, in order:
 
 ## Where things are
 
-- Branch: `feat/multi-target` (from `main`). Not merged, not pushed.
+- Merged into local `main` on 2026-10-29 (branch `feat/multi-target` deleted). Not pushed.
 - Package: `jev_runner/` — `config.py`, `guards.py` (money/secret guards), `android_tree.py`
   (uiautomator XML → Jev page), `targets/{base,android,chrome}.py`, `adb_link.py`
   (USB/wireless keeper + relay), `flows.py` (saved flows, replay, auto-save/heal),
@@ -48,7 +48,7 @@ Read, in order:
 | 10 MCP tools, rename to jev-runner, README | done, reviewed |
 | 11 on-device verification | ran; found 5 bugs → fixed and reviewed (commits e277fcf, cc3caf8, dc7c691, 957effd); live relay check passed |
 | Final whole-branch review | done; fixes applied (sticky secret detection + scrubbed history/results, hint + password blanking, `w` ids for WebView links, locator-checked resume, ambiguous amounts rejected, single android lock + `unknown_device`, AdbLink lock, config list validation, shutdown money warning, docs) — 281 tests |
-| Finish (merge/PR decision, optional repo folder rename to `jev-runner`) | **not started — ask Eduardo** |
+| Finish | merged to local `main`; push and optional repo rename to `jev-runner` still need Eduardo |
 
 ### Task 11 fixes (done — kept here for context)
 
@@ -67,12 +67,12 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
 
 ## How to continue
 
-1. `git checkout feat/multi-target && uv sync && uv run pytest -q` — must be green.
+1. `git checkout main && uv sync && uv run pytest -q` — must be green.
 2. Task 11 fixes and the final whole-branch review fixes are done (281 tests). Synthetic
    WebView links are excluded from fingerprints and flow signatures and use their own ids (`w0`, …).
 3. Remaining deferred minors (ledger, `grep "minor (deferred)"`): tab leak if Chrome attach
    fails after createTarget; resolve_app cost.
-4. Ask Eduardo how to finish (merge to main / PR / keep branch) and whether to rename the repo folder.
+4. Ask Eduardo before pushing `main` or renaming the repo folder.
 
 ## Non-negotiable safety rules (do not weaken)
 
