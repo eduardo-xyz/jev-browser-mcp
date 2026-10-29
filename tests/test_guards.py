@@ -1,9 +1,9 @@
-from jev_mcp.guards import check_money, is_money_action, is_secret_field, scrub
+from jev_mcp.guards import check_money, is_money_action, is_secret_field, parse_amount, scrub
 
 
 def test_amount_formats_match():
     for text in ["Monto: ₡150.000,00", "CRC 150,000.00", "₡150 000", "150000"]:
-        assert check_money(text, {"amount": 150000}).ok, text
+        assert check_money(f"Para Juan Perez {text}", {"amount": 150000, "recipient": "Juan Perez"}).ok, text
 
 
 def test_amount_off_by_factor_does_not_match():
@@ -45,3 +45,58 @@ def test_scrub_removes_secret_everywhere():
     page = {"text": "Código 482913 ok", "actions": [{"label": "482913", "value": "482913"}]}
     out = scrub(page, ["482913"])
     assert "482913" not in str(out) and page["text"] == "Código 482913 ok"
+
+
+def test_recipient_name_needs_token_boundaries():
+    p = {"amount": 150000, "recipient": "Ana Perez"}
+    assert not check_money("Para: Juana Perezoso 150000", p).ok
+    assert check_money("Para: Ana Perez 150000", p).ok
+
+
+def test_numeric_recipient_only_standalone_digit_run():
+    p = {"amount": 150000, "recipient": "5000"}
+    assert not check_money("Servicio 9999 Monto 150000", p).ok
+    assert not check_money("Servicio 15000 Monto 150000", p).ok
+    assert check_money("Servicio 5000 Monto 150000", p).ok
+
+
+def test_adjacent_numbers_do_not_fuse():
+    p = {"amount": 150000, "recipient": "Juan Perez"}
+    assert not check_money("Juan Perez Cuotas 1\n50.000,00", p).ok
+    assert check_money("Juan Perez Destino ****4066 150.000,00", {**p, "recipient": ["Juan Perez", "4066"]}).ok
+
+
+def test_check_money_fails_closed_on_missing_keys():
+    r = check_money("Juan Perez 150000", {"amount": 150000})
+    assert not r.ok and "recipient" in r.expected
+    r = check_money("Juan Perez 150000", {"recipient": "Juan Perez"})
+    assert not r.ok and "amount" in r.expected
+    assert not check_money("Juan Perez 150000", {}).ok
+
+
+def test_money_label_prefix_and_exclusions(cfg):
+    page = {"url": "net.bac.sbe.android/x", "text": ""}
+    click = lambda label: {"kind": "click", "label": label}
+    for label in ["Confirmar transferencia", "Transferir ahora", "Pagar ₡150.000"]:
+        assert is_money_action(click(label), page, {}, cfg), label
+    for label in ["Enviar código", "Cancelar pago", "Enviar por correo", "Pagar con token"]:
+        assert not is_money_action(click(label), page, {}, cfg), label
+
+
+def test_multiple_masks_need_own_accounts():
+    text = "Origen ****4066 Destino ****1234 150000"
+    assert not check_money(text, {"amount": 150000, "recipient": "CR05015202001026284066"}).ok
+    p = {"amount": 150000, "recipient": "CR05015202001026284066"}
+    assert not check_money("Origen ****4066 Destino ****1234 150000", {**p, "recipient": "CR0500001234"}).ok
+    assert check_money(text, {"amount": 150000, "recipient": "CR0500001234"}, ["4066"]).ok
+    assert not check_money(text, {"amount": 150000, "recipient": "CR0500009999"}, ["4066"]).ok
+
+
+def test_parse_amount_rejects_bool_and_nonfinite():
+    for v in [True, float("nan"), float("inf")]:
+        assert parse_amount(v) is None
+
+
+def test_scrub_title_url_and_no_actions_key():
+    out = scrub({"url": "x/482913", "title": "t 482913", "text": "a"}, ["482913"])
+    assert "482913" not in str(out) and "actions" not in out

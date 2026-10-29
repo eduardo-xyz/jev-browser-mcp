@@ -27,6 +27,11 @@ class Config:
         "codigo", "code", "otp", "token", "pin", "clave",
         "contrasena", "password", "verification", "verificacion",
     ])
+    money_exclude_words: list[str] = field(default_factory=lambda: [
+        "codigo", "code", "otp", "token", "sms", "correo", "email",
+        "cancelar", "cancel",
+    ])
+    own_accounts: list[str] = field(default_factory=list)
     session_ttl_s: int = 900
     reconnect_window_s: int = 30
     data_dir: Path = field(default_factory=data_dir)

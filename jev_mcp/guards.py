@@ -1,4 +1,5 @@
 """Money and secret guards: decide when Jev must pause or be kept blind."""
+import math
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -6,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 
 from .config import Config
 
-_NUMBER = re.compile(r"\d[\d.,\s]*\d|\d")
+_NUMBER = re.compile(r"\d{1,3}(?:[ .,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?")
 _MASKED = re.compile(r"[*•xX]{2,}\s?(\d{3,6})")
 
 
@@ -44,13 +45,19 @@ def is_money_action(action: dict, page: dict, money_params: dict, cfg: Config) -
     guarded = bool(money_params) or any(
         host == app or host.endswith("." + app) for app in cfg.money_apps
     )
-    labels = {normalize(label) for label in cfg.money_labels}
-    return guarded and normalize(action.get("label") or "") in labels
+    if not guarded:
+        return False
+    label = normalize(action.get("label") or "")
+    if set(label.split()) & {normalize(w) for w in cfg.money_exclude_words}:
+        return False
+    return any(label == m or label.startswith(m + " ") for m in map(normalize, cfg.money_labels))
 
 
 def parse_amount(s: str | int | float) -> Decimal | None:
+    if isinstance(s, bool):
+        return None
     if isinstance(s, (int, float)):
-        return Decimal(str(s))
+        return Decimal(str(s)) if math.isfinite(s) else None
     s = re.sub(r"[^\d.,]", "", s)
     if not re.search(r"\d", s):
         return None
@@ -71,20 +78,42 @@ def _amount_seen(text: str) -> list[Decimal]:
     return [a for t in _NUMBER.findall(text) if (a := parse_amount(t)) is not None]
 
 
-def _recipient_ok(text: str, forms: list[str]) -> bool:
+def _digits(s: str) -> str:
+    return "".join(c for c in s if c.isdigit())
+
+
+def _recipient_ok(text: str, forms: list[str], own_accounts: list[str]) -> bool:
     masked = _MASKED.findall(text)
     if masked:
-        digits = ["".join(c for c in f if c.isdigit()) for f in forms]
-        return any(d.endswith(m) for d in digits for m in masked)
-    norm = normalize(text)
-    return any(n and n in norm for n in map(normalize, forms))
+        digits = [_digits(f) for f in forms]
+        own = [_digits(a) for a in own_accounts]
+        to_recipient = [any(d.endswith(m) for d in digits) for m in masked]
+        to_own = [any(o.endswith(m) for o in own) for m in masked]
+        return any(to_recipient) and all(r or o for r, o in zip(to_recipient, to_own))
+    norm = f" {normalize(text)} "
+    runs = set(re.findall(r"\d+", text))
+    runs |= set(re.findall(r"\d+", re.sub(r"(?<=\d)[ -](?=\d)", "", text)))
+    for form in forms:
+        if re.fullmatch(r"[\d\s-]+", form) and _digits(form):
+            if _digits(form) in runs:
+                return True
+        elif (n := normalize(form)) and f" {n} " in norm:
+            return True
+    return False
 
 
-def check_money(text: str, money_params: dict) -> MoneyCheck:
+def check_money(
+    text: str, money_params: dict, own_accounts: list[str] | None = None
+) -> MoneyCheck:
     expected: dict = {}
     seen: dict = {}
     ok = True
+    for key in ("amount", "recipient"):
+        if money_params.get(key) in (None, "", []):
+            expected[key], seen[key], ok = "<required>", None, False
     for key, value in money_params.items():
+        if value in (None, "", []):
+            continue
         if key == "amount":
             want = parse_amount(value)
             found = _amount_seen(text)
@@ -92,7 +121,7 @@ def check_money(text: str, money_params: dict) -> MoneyCheck:
             expected[key], seen[key] = str(want), [str(a) for a in found]
         elif key == "recipient":
             forms = [value] if isinstance(value, str) else list(value)
-            good = _recipient_ok(text, forms)
+            good = _recipient_ok(text, forms, own_accounts or [])
             expected[key], seen[key] = forms, _MASKED.findall(text)
         else:
             good = normalize(str(value)) in normalize(text)
@@ -113,10 +142,12 @@ def scrub(page: dict, secrets: list[str]) -> dict:
         return v
 
     out = dict(page)
-    if "text" in out:
-        out["text"] = clean(out["text"])
-    out["actions"] = [
-        {**a, **{k: clean(a[k]) for k in ("value", "label") if k in a}}
-        for a in page.get("actions", [])
-    ]
+    for key in ("url", "title", "text"):
+        if key in out:
+            out[key] = clean(out[key])
+    if "actions" in page:
+        out["actions"] = [
+            {**a, **{k: clean(a[k]) for k in ("value", "label") if k in a}}
+            for a in page["actions"]
+        ]
     return out
