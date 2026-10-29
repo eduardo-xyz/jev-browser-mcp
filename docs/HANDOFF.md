@@ -46,11 +46,11 @@ Read, in order:
 | 8 ChromeTarget (blank-tab recovery) | done, reviewed |
 | 9 jevd daemon + client | done, reviewed |
 | 10 MCP tools, rename to jev-runner, README | done, reviewed |
-| 11 on-device verification | ran; found 5 bugs → **fix in progress** (see below) |
-| Final whole-branch review | **not started** |
+| 11 on-device verification | ran; found 5 bugs → fixed and reviewed (commits e277fcf, cc3caf8, dc7c691, 957effd); live relay check passed |
+| Final whole-branch review | **in progress** (main..957effd) |
 | Finish (merge/PR decision, optional repo folder rename to `jev-runner`) | **not started — ask Eduardo** |
 
-### In progress when this was written: Task 11 fixes
+### Task 11 fixes (done — kept here for context)
 
 Findings from the real Redmi Pad (details in the spec's "Verification results" and the ledger):
 - (a) macOS Local Network privacy blocks the **uv-managed Python** from LAN hosts → the
@@ -69,7 +69,7 @@ Check `git log` for commits after `d00063d` to see which of these landed. Verify
 ## How to continue
 
 1. `git checkout feat/multi-target && uv sync && uv run pytest -q` — must be green.
-2. Finish/verify the Task 11 fixes above (each with an offline test first).
+2. Task 11 fixes are done (232 tests). Synthetic WebView links are excluded from fingerprints and flow signatures.
 3. Run a whole-branch review of `main..feat/multi-target` against the spec. Deferred minor
    findings to triage are listed in the ledger (`grep "minor (deferred)"`); the notable ones:
    password EditText node text not blanked in page text; tab leak if Chrome attach fails after
