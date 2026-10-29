@@ -426,3 +426,19 @@ def test_label_cache_shared_via_link(link):
     mk(link, d, app="Gmail")  # second target on the same daemon link: cached
     assert calls["n"] == 1
     assert link.app_labels == {"com.google.android.gm": "Gmail"}
+
+
+def test_launch_waits_for_screen_to_settle(fake_device, link):
+    # cold start: splash with nothing to act on, then the real screen
+    splash = '<hierarchy><node package="com.other.app" class="android.widget.FrameLayout" enabled="true" bounds="[0,0][1000,2000]"/></hierarchy>'
+    seq = [splash, splash, fake_device.xml, fake_device.xml]
+    fake_device.dump_hierarchy = lambda compressed=False: seq.pop(0) if len(seq) > 1 else seq[0]
+    t = mk(link, fake_device, app="com.other.app")
+    assert len(seq) == 1 and t.observe()["actions"]
+
+
+def test_launch_settle_gives_up_after_timeout(fake_device, link, monkeypatch):
+    monkeypatch.setattr(AndroidTarget, "settle_timeout", 0.3)
+    splash = '<hierarchy><node package="com.other.app" class="android.widget.FrameLayout" enabled="true" bounds="[0,0][1000,2000]"/></hierarchy>'
+    fake_device.dump_hierarchy = lambda compressed=False: splash
+    mk(link, fake_device, app="com.other.app")  # returns instead of hanging

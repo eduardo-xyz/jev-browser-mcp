@@ -1,7 +1,7 @@
 """AndroidTarget: reads the screen and drives input through a persistent uiautomator2 session."""
 import re
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 
 from ..android_tree import parse_hierarchy
 from ..guards import normalize
@@ -113,6 +113,21 @@ class AndroidTarget:
             pkg = app if "." in app else self._call(lambda d: resolve_app(d, app, self._labels))
             if (self._call(lambda d: d.app_current()) or {}).get("package") != pkg:
                 self._call(lambda d: d.app_start(pkg))
+                self._settle()
+
+    settle_timeout = 5.0
+
+    def _settle(self):
+        """After a launch, wait until the screen has actions and two dumps agree (splash screens
+        and half-drawn first frames otherwise reach Jev, which reports BLOCKED)."""
+        deadline, prev = monotonic() + self.settle_timeout, None
+        while monotonic() < deadline:
+            p = self.observe()
+            on_screen = any("bounds" in a for a in p["actions"])  # not just back/home/wait
+            if on_screen and p["fingerprint"] == prev:
+                return
+            prev = p["fingerprint"] if on_screen else None
+            sleep(0.25)
 
     def _dev(self):
         if self.d is None:

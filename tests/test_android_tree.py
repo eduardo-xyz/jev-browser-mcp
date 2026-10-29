@@ -222,3 +222,13 @@ def test_synthetic_links_have_own_id_namespace():
     real = [a for a in more["actions"] if "bounds" in a and not a.get("synthetic")]
     assert [(a["id"], a["label"]) for a in real] == [("n0", "Ingresar")]
     assert [a["id"] for a in more["actions"] if a.get("synthetic")] == ["w0", "w1"]
+
+
+def test_unlabelled_field_takes_overlay_placeholder_not_far_text():
+    xml = ('<hierarchy><node package="a.b" class="android.widget.FrameLayout" enabled="true" bounds="[0,0][2560,1600]">'
+           '<node package="a.b" class="android.widget.TextView" text="Projects" enabled="true" bounds="[153,474][291,522]"/>'
+           '<node package="a.b" class="android.view.View" content-desc="Ask ChatGPT" enabled="true" bounds="[1056,583][2333,637]"/>'
+           '<node package="a.b" class="android.widget.EditText" text="" clickable="true" enabled="true" bounds="[1056,556][2333,664]"/>'
+           '</node></hierarchy>')
+    fills = [a for a in parse_hierarchy(xml, "a.b", "M")["actions"] if a["kind"] == "fill"]
+    assert [a["label"] for a in fills] == ["Ask ChatGPT"]

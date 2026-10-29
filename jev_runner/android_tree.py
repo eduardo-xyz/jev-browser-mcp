@@ -176,7 +176,7 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
     text = "\n".join(lines)[:_TEXT_CAP]
 
     actions = []
-    text_nodes = []  # (bottom, text) of preceding included text nodes
+    text_nodes = []  # (bottom, text, index, left, right) of preceding included text nodes
     synthetic = []  # WebView text links emitted so far (own id namespace: w0, w1, ...)
     real = 0  # element actions emitted so far (ids n0, n1, ...)
     scroll = False
@@ -198,10 +198,14 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
             tail = _rid_tail(n.rid)
             label = n.text or n.desc or n.hint or _desc_text(n)
             if not label and is_edit:
+                # a placeholder drawn on top of the field (e.g. Compose hint text) names it best
+                label = next((o.text or o.desc for o in inc
+                              if o is not n and (o.text or o.desc) and _contains(n.bounds, o.bounds)), "")
+            if not label and is_edit:
                 cands = [
                     (t - bb, tx)
-                    for bb, tx, idx in text_nodes
-                    if idx < i and 0 <= t - bb <= _ABOVE_PX
+                    for bb, tx, idx, tl, tr in text_nodes
+                    if idx < i and 0 <= t - bb <= _ABOVE_PX and tl < r and tr > l  # above and overlapping
                 ]
                 if cands:
                     label = min(cands, key=lambda c: c[0])[1]
@@ -249,7 +253,7 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
             actions.append(synthetic[-1])
         own = n.text or n.desc
         if own and not (actionable and is_edit):
-            text_nodes.append((b, own, i))
+            text_nodes.append((b, own, i, l, r))
 
     actions.append({"id": "back", "kind": "back", "label": "Go back"})
     actions.append({"id": "wait", "kind": "wait", "label": "Wait for the screen to update"})

@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; 283 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 286 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -108,6 +108,16 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   literally in the goal. (3) **False done + bad self-heal:** replaying the same goal while already in that chat, Jev
   filled the message and said DONE without tapping Send (the identical earlier message was visible), and the flow was
   `flow_updated` to that broken shorter version. Flow deleted; not yet fixed.
+
+- More real-Jev findings (2026-10-29): (4) learn run tapped WhatsApp's "Ask" (Meta AI) with the search text, recorded
+  it in the flow, and the replay repeated it and reported a false `done` in the Meta AI chat — flows learned from runs
+  that end in a wrong place are saved as-is. (5) Fixed: no wait after app launch (splash reached Jev → BLOCKED);
+  `AndroidTarget._settle` now waits up to 5 s for a stable screen with on-screen actions (ChatGPT's splash still
+  exceeded it once). (6) Fixed: unlabelled EditText took a far-away "preceding" label (ChatGPT box labelled
+  "Projects"); now an overlay placeholder inside the field wins and above-labels must overlap horizontally.
+  Pending user task: ChatGPT orange-cat image → WhatsApp to the user's wife (exact chat name "Grethel Sánchez";
+  user approved sending) + a text saying it's a test. Do it in steps, learn=False, verify chat header by screenshot
+  before sending. `git push origin main` was blocked by the permission classifier — user must run it.
 
 ## Known residuals after final review (2026-10-29)
 
