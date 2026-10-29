@@ -268,3 +268,16 @@ def test_stop_shuts_down_listener():
     relay.start()
     relay.stop()
     assert relay._listener is None
+
+
+def test_serial_tracks_last_connect(fake_adb, fake_clock, cfg_android):
+    fake_adb.devices = ["zdirl7t84pqwh6ww\tdevice"]
+    link = AdbLink(cfg_android, run=fake_adb, resolve=lambda *a, **k: None,
+                   sleep=fake_clock.sleep, clock=fake_clock.now)
+    assert link.serial is None
+    link.ensure_connected()
+    assert link.serial == "zdirl7t84pqwh6ww"
+    fake_adb.devices = []
+    with pytest.raises(DeviceDisconnected):
+        link.ensure_connected()
+    assert link.serial is None

@@ -138,6 +138,7 @@ class AdbLink:
         self.relay: TcpRelay | None = None
         self._tcpip_done = False
         self._relay_busy = False
+        self.serial: str | None = None  # last serial reached; None after a failed connect
 
     def _timeout(self, deadline: float, cap: float = 15) -> float:
         return min(cap, max(1.0, deadline - self._clock()))
@@ -220,8 +221,10 @@ class AdbLink:
         while True:
             serial = self._attempt(deadline)
             if serial:
+                self.serial = serial
                 return serial
             if self._expired(deadline):
+                self.serial = None
                 msg = f"Android device not reachable within {self.cfg.reconnect_window_s}s"
                 if self._relay_busy:
                     msg += f" (relay port {self.cfg.relay_port} is busy)"
