@@ -1,38 +1,105 @@
-"""MCP server exposing TypeSafe's Jev browser agent as a single browse_web tool."""
+"""Thin MCP front end for the jevd daemon, which runs TypeSafe's Jev agent on Chrome and Android."""
 
-import os
+from typing import Literal
 
-from jev_ultrafast import Agent
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from summary import BrowseResult, summarize
+from jev_runner import client
 
-REQUIRED_ENV_VARS = ("TYPESAFE_API_KEY", "TEXT_MODEL_API_KEY")
+mcp = MCPServer("jev-runner")
 
-mcp = MCPServer("jev-browser-mcp")
+
+def _call(op: str, args: dict) -> dict:
+    try:
+        return client.call(op, args)
+    except RuntimeError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool()
-def browse_web(url: str, goal: str, max_steps: int = 40) -> BrowseResult:
-    """Drive a real Chrome browser toward a natural-language goal using TypeSafe's Jev agent."""
-    missing = [name for name in REQUIRED_ENV_VARS if not os.environ.get(name)]
-    if missing:
-        raise ToolError(f"Missing required environment variable(s): {', '.join(missing)}")
+def run_task(
+    target: Literal["chrome", "android"],
+    goal: str,
+    url_or_app: str | None = None,
+    params: dict | None = None,
+    money_params: list[str] | None = None,
+    flow: str | None = None,
+    save_as: str | None = None,
+    max_steps: int = 40,
+    session_id: str | None = None,
+    device: str | None = None,
+    learn: bool = True,
+) -> dict:
+    """Run a natural-language goal on Mac Chrome or an Android phone using TypeSafe's Jev agent.
 
-    try:
-        with Agent(url, goal) as agent:
-            state = None
-            hit_step_cap = False
-            for state in agent.run():
-                if len(state["history"]) >= max_steps:
-                    hit_step_cap = True
-                    break
-            return summarize(state, hit_step_cap)
-    except ToolError:
-        raise
-    except Exception as exc:
-        raise ToolError(str(exc)) from exc
+    Make ONE call per goal. `url_or_app` may be a URL (chrome), an Android package, or an
+    Android app name. For payments pass the exact `amount` and `recipient` in `params`
+    (put account/phone numbers in `params`, not only in the goal text); the daemon refuses
+    to tap a money action unless they match what is on screen.  `money_params` lists the
+    `params` keys that are money-related (e.g. amount, recipient).
+
+    Results have a `status`:
+    - `paused_needs_input`: ask the user for the requested value, then call
+      `resume(session_id, input=...)`.
+    - `paused_mismatch`: show the user `expected` and `seen`; call
+      `resume(session_id, confirm=True)` ONLY after the user explicitly approves.
+    - `error` with reason `money_action_uncertain`: tell the user to check the app
+      manually, then call `end_session` (the session is terminal).
+    Results may include `flow_used` / `flow_saved` / `flow_updated` (learned flows replay
+    cheaply; pass `learn=False` to disable auto-save/self-heal, `flow`/`save_as` to name
+    one). `device_busy` errors name the session holding the device.
+    """
+    return _call("run_task", {
+        "target": target, "goal": goal, "url_or_app": url_or_app, "params": params,
+        "money_params": money_params, "flow": flow, "save_as": save_as,
+        "max_steps": max_steps, "session_id": session_id, "device": device, "learn": learn,
+    })
+
+
+@mcp.tool()
+def resume(
+    session_id: str,
+    input: str | None = None,
+    instruction: str | None = None,
+    confirm: bool = False,
+) -> dict:
+    """Continue a paused session. Use `input` to answer paused_needs_input (secrets such as
+    OTPs go here and are never logged), `instruction` to give extra guidance, and
+    `confirm=True` to approve a paused_mismatch ONLY after the user has approved it."""
+    return _call("resume", {
+        "session_id": session_id, "input": input, "instruction": instruction, "confirm": confirm,
+    })
+
+
+@mcp.tool()
+def screenshot(session_id: str) -> dict:
+    """Save a screenshot of the session's current screen; returns a file path, not image data."""
+    return _call("screenshot", {"session_id": session_id})
+
+
+@mcp.tool()
+def end_session(session_id: str) -> dict:
+    """Close a session and release its device/browser. Required after money_action_uncertain."""
+    return _call("end_session", {"session_id": session_id})
+
+
+@mcp.tool()
+def status() -> dict:
+    """Show daemon status: open sessions, device holders and configured targets."""
+    return _call("status", {})
+
+
+@mcp.tool()
+def list_flows() -> dict:
+    """List saved (learned or named) flows."""
+    return _call("list_flows", {})
+
+
+@mcp.tool()
+def delete_flow(name: str) -> dict:
+    """Delete a saved flow by name."""
+    return _call("delete_flow", {"name": name})
 
 
 if __name__ == "__main__":
