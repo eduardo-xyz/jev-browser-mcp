@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from jev_runner.config import Config
 from jev_runner.guards import (
     check_money,
@@ -136,6 +138,19 @@ def test_scrub_value_recurses():
     from jev_runner.guards import scrub_value
     v = {"a": ["482913", ("x 482913",)], "b": 482913, "c": "4829130"}
     assert scrub_value(v, ["482913"]) == {"a": ["•••", ("x •••",)], "b": "•••", "c": "4829130"}
+
+
+def test_ambiguous_single_decimal_digit_amount_is_rejected():
+    assert parse_amount("150.5") is None and parse_amount("150,5") is None
+    assert not check_money("Monto ₡1.505,00 Destino ****4066",
+                           {"amount": "150.5", "recipient": "4066"}).ok
+    assert not check_money("Monto ₡1.505,00 Destino ****4066",
+                           {"amount": "150,5", "recipient": "4066"}).ok
+    # unchanged rules
+    assert parse_amount("150.50") == parse_amount("150,50") == Decimal("150.50")
+    assert parse_amount("1.505,00") == Decimal("1505.00")
+    assert parse_amount("150.000") == Decimal("150000")
+    assert parse_amount(150.5) == Decimal("150.5")
 
 
 def test_secret_field_checks_hint_and_resource_id_tail(cfg):

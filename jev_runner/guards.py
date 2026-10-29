@@ -69,6 +69,8 @@ def parse_amount(s: str | int | float) -> Decimal | None:
     s = re.sub(r"[^\d.,]", "", s)
     if not re.search(r"\d", s):
         return None
+    if re.fullmatch(r"\d+[.,]\d", s):
+        return None  # "150.5": a decimal or a mistyped thousands group? ambiguous: fail closed
     if "." in s and "," in s:
         point = max(s.rfind("."), s.rfind(","))
         s = re.sub(r"[.,]", "", s[:point]) + "." + re.sub(r"[.,]", "", s[point + 1:])
