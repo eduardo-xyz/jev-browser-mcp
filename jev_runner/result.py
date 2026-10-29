@@ -1,4 +1,5 @@
 """Compact tool results: small JSON, never image bytes."""
+from .guards import scrub_value
 
 
 def _line(h: dict) -> str:
@@ -33,4 +34,5 @@ def build(runner) -> dict:
     flow = getattr(runner, "flow", None)
     if flow is not None:
         out["flow_used"] = flow.name
-    return out
+    # belt and braces: no typed secret may reach a tool result, whatever field it hides in
+    return scrub_value(out, getattr(runner, "secrets", None) or [])

@@ -102,6 +102,7 @@ class Runner:
         self.model_calls = 0
         self.elapsed_ms = 0
         self.secrets: list[str] = []
+        self._secret_fields: set = set()  # locators of fields a secret was typed into
         self.pending: dict | None = None
         self.last_used = time.time()
         self.executed_money = False  # never reset once True: the receipt must survive
@@ -204,7 +205,11 @@ class Runner:
         page = self._observe()
         same_screen = page.get("fingerprint") == pending["fingerprint"]
         if same_screen:
-            found = [a for a in page.get("actions", []) if a["id"] == pending["action_id"]]
+            # ids alone can shift under an unchanged fingerprint: the locator must agree too
+            found = [a for a in page.get("actions", []) if a["id"] == pending["action_id"]
+                     and locator_of(a) == pending["locator"]]
+            if not found:
+                found = find_by_locator(page, pending["locator"])
         else:
             found = find_by_locator(page, pending["locator"])
         if pending["type"] == "money":
@@ -326,7 +331,8 @@ class Runner:
     def _replay(self, j: int, step: dict, action: dict, page: dict):
         self.flow_i = j + 1  # a pause (secret/money) consumes the step; resume executes it
         if step.get("value") == "secret" and action.get("kind") == "fill":
-            self.pending = self._pending_for("secret", action, page, field=action["label"])
+            self.pending = self._pending_for("secret", action, page,
+                                             field=scrub_text(action["label"], self.secrets))
             raise _Stop("paused_needs_input")
         try:
             self._dispatch(action, page, lambda: self._step_text(step))
@@ -387,9 +393,10 @@ class Runner:
 
     def _dispatch(self, action: dict, page: dict, text_for):
         """Shared by Jev-chosen and replayed actions: secret and money guards first."""
-        if is_secret_field(action, self.cfg.secret_patterns):
+        if self._is_secret(action):
             # Secrets never go to the text model: ask the human instead.
-            self.pending = self._pending_for("secret", action, page, field=action["label"])
+            self.pending = self._pending_for("secret", action, page,
+                                             field=scrub_text(action["label"], self.secrets))
             raise _Stop("paused_needs_input")
         money_params = self._money_params()
         if is_money_action(action, page, money_params, self.cfg):
@@ -398,8 +405,29 @@ class Runner:
         text = text_for() if action["kind"] == "fill" else None
         self._execute(action, page, text)
 
+    @staticmethod
+    def _field_keys(action: dict) -> list:
+        rid = action.get("resource_id")
+        keys = [("rid", rid)] if rid else []
+        return keys + [("loc", repr(sorted(locator_of(action).items())))]
+
+    def _is_secret(self, action: dict) -> bool:
+        """Sticky secret detection: once a field took a secret it stays secret.
+
+        Android shows an EditText's current text as its label, so after a secret is typed
+        into a plain field the label *is* the secret and label patterns no longer match."""
+        if action.get("kind") != "fill":
+            return False
+        if is_secret_field(action, self.cfg.secret_patterns):
+            return True
+        if any(scrub_value(action.get(k), self.secrets) != action.get(k)
+               for k in ("label", "hint", "value")):
+            return True
+        return any(k in self._secret_fields for k in self._field_keys(action))
+
     def _model_text(self, action: dict, page: dict) -> str:
-        ctx = model.field_context(self.goal, action, scrub(page, self.secrets), self.history)
+        ctx = model.field_context(self.goal, scrub_value(action, self.secrets),
+                                  scrub(page, self.secrets), self.history)
         try:
             text, _ = self._field_text(ctx)
         except ValueError:
@@ -431,11 +459,13 @@ class Runner:
             self.target.act(action, page, text=text)
         # From here the action has executed: nothing below may trigger the pre-act retry path.
         self._stale = 0
-        entry = history_entry(action, page, text, self.cfg.secret_patterns)
+        entry = history_entry(scrub_value(action, self.secrets), scrub(page, self.secrets), text,
+                              self.cfg.secret_patterns)
         if text is not None and (secret or entry["text"] == "•••"):
             entry["text"] = "•••"
             if text not in self.secrets:
                 self.secrets.append(text)
+            self._secret_fields.update(self._field_keys(action))
         entry["value_source"] = value_source(text, self.params, secret=entry["text"] == "•••")
         self.history.append(entry)
         try:

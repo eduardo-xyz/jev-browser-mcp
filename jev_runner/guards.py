@@ -30,8 +30,11 @@ def is_secret_field(action: dict, patterns: list[str]) -> bool:
         return False
     if action.get("password"):
         return True
-    label = f" {normalize(action.get('label') or '')} "
-    return any(f" {p} " in label for p in map(normalize, patterns) if p)
+    tail = re.split(r"[/:]", action.get("resource_id") or "")[-1]
+    tail = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", tail)  # etOtp -> et Otp
+    parts = (action.get("label") or "", action.get("hint") or "", tail)
+    text = f" {' '.join(normalize(p) for p in parts)} "
+    return any(f" {p} " in text for p in map(normalize, patterns) if p)
 
 
 def _host(url: str) -> str:
@@ -174,12 +177,12 @@ def scrub(page: dict, secrets: list[str]) -> dict:
         return scrub_text(v, secrets) if isinstance(v, str) else v
 
     out = dict(page)
-    for key in ("url", "title", "text"):
+    for key in ("url", "title", "text", "fingerprint"):  # fingerprint: opaque, but may embed text
         if key in out:
             out[key] = clean(out[key])
     if "actions" in page:
         out["actions"] = [
-            {**a, **{k: clean(a[k]) for k in ("value", "label") if k in a}}
+            {**a, **{k: clean(a[k]) for k in ("value", "label", "hint") if k in a}}
             for a in page["actions"]
         ]
     return out

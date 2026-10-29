@@ -382,3 +382,127 @@ def test_receipt_not_overwritten_by_later_done(tmp_path):
     assert first["reference"] == "99887766"
     out = r.resume(instruction="check balance")
     assert out["status"] == "done" and out["receipt"] == first
+
+
+# --- final review fixes -------------------------------------------------------
+
+def _spying(choices):
+    """A choose that records everything it is shown (page, goal and history)."""
+    seen, it = [], iter(choices)
+
+    def choose(view, goal, history):
+        seen.append(json.dumps([view, goal, history], ensure_ascii=False))
+        return {"choice": next(it)}
+
+    return choose, seen
+
+
+def test_retyping_into_field_whose_label_is_now_the_otp_pauses_and_never_leaks(cfg):
+    # Android: an EditText's label is its current text. After the OTP is typed into a
+    # non-password field, the field's label becomes the OTP itself.
+    p1 = page(fill("n0", "Código", rid="com.app:id/etOtp"), click("n1", "Continuar"))
+    p2 = page(fill("n0", "482913", rid="com.app:id/etOtp"), click("n1", "Continuar"),
+              text="482913\nCódigo incorrecto")
+    p3 = page()
+    t = FakeTarget([p1, p2, p3])
+    choose, seen = _spying(["n0", "n0", "DONE"])
+    ctxs = []
+
+    def field_text(ctx):
+        ctxs.append(json.dumps(ctx, ensure_ascii=False))
+        return "000000", None
+
+    r = Runner("s", t, "log in", None, cfg, choose=choose, field_text=field_text, learn=False)
+    assert r.run()["status"] == "paused_needs_input"
+    out = r.resume(input="482913")
+    assert out["status"] == "paused_needs_input"
+    assert ctxs == []  # the text model was never asked
+    assert t.acted == [("n0", "482913")]
+    assert "482913" not in json.dumps(out, ensure_ascii=False)
+    assert all("482913" not in s for s in seen)
+    out = r.resume(input="777111")
+    assert out["status"] == "done" and t.acted[1] == ("n0", "777111")
+    assert all(s not in json.dumps(out, ensure_ascii=False) for s in ("482913", "777111"))
+    assert all("482913" not in s and "777111" not in s for s in seen)
+
+
+def test_fill_with_secret_in_value_is_treated_as_secret(cfg):
+    p1 = page(fill("n0", "Código"), click("n1", "Ok"))
+    p2 = page({**fill("n0", "Campo"), "value": "482913"}, click("n1", "Ok"))
+    t = FakeTarget([p1, p2, page()])
+    ctxs = []
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n0", "n0", "DONE"]),
+               field_text=lambda ctx: ctxs.append(ctx) or ("x", None), learn=False)
+    r.run()
+    assert r.resume(input="482913")["status"] == "paused_needs_input" and ctxs == []
+
+
+def test_field_reused_by_resource_id_is_sticky_secret(cfg):
+    # same resource id, innocuous label, no secret on screen: still a secret field
+    p1 = page(fill("n0", "Código", rid="com.app:id/f1"), click("n1", "Ok"))
+    p2 = page(fill("n0", "Campo", rid="com.app:id/f1"), click("n1", "Ok"))
+    t = FakeTarget([p1, p2, page()])
+    ctxs = []
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n0", "n0", "DONE"]),
+               field_text=lambda ctx: ctxs.append(ctx) or ("x", None), learn=False)
+    r.run()
+    assert r.resume(input="482913")["status"] == "paused_needs_input" and ctxs == []
+
+
+def test_click_label_with_secret_scrubbed_in_history_and_results(cfg):
+    p1 = page(fill("n0", "OTP"), click("n1", "Ok"))
+    p2 = page(click("n5", "Reenviar 482913"), click("n6", "Ok"))
+    t = FakeTarget([p1, p2, page(), page()])
+    choose, seen = _spying(["n0", "n5", "DONE"])
+    r = Runner("s", t, "g", None, cfg, choose=choose, learn=False)
+    r.run()
+    out = r.resume(input="482913")
+    assert out["status"] == "done" and t.acted[1][0] == "n5"
+    assert "482913" not in json.dumps(out, ensure_ascii=False)
+    assert all("482913" not in s for s in seen)
+    assert "482913" not in json.dumps(r.history, ensure_ascii=False)
+
+
+def test_field_context_gets_scrubbed_action(cfg, monkeypatch):
+    from jev_runner import runner as runner_mod
+    got = []
+    monkeypatch.setattr(runner_mod.model, "field_context",
+                        lambda goal, action, page, history: got.append(action) or {})
+    monkeypatch.setattr(runner_mod.Runner, "_is_secret", lambda self, a: False)
+    t = FakeTarget([page({**fill("n0", "Nota 482913"), "value": "482913"}), page()])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n0", "DONE"]),
+               field_text=lambda ctx: ("hola", None), learn=False)
+    r.secrets.append("482913")
+    r.run()
+    assert got and "482913" not in json.dumps(got, ensure_ascii=False)
+    assert "482913" not in json.dumps(r.history, ensure_ascii=False)
+
+
+def test_result_build_scrubs_every_string(cfg):
+    from jev_runner import result
+    t = FakeTarget([page()])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["DONE"]), learn=False)
+    r.secrets.append("482913")
+    r.page = {"url": "app://x?otp=482913"}
+    r.reason = "boom 482913"
+    r.pending = {"field": "482913", "expected": {"a": "482913"}, "seen": ["482913"]}
+    r.history.append({"kind": "click", "action": "Reenviar 482913", "text": None})
+    assert "482913" not in json.dumps(result.build(r), ensure_ascii=False)
+
+
+def test_same_screen_resume_requires_matching_locator(cfg):
+    # A synthetic link appears above the field while paused; the fingerprint ignores it,
+    # so the old ids shift under an unchanged fingerprint.
+    before = page(fill("n0", "Usuario", rid="com.app:id/user"),
+                  fill("n1", "Código", rid="com.app:id/otp"))
+    after = page({"id": "n0", "node": "n0", "kind": "click", "label": "Tipo de Cambio",
+                  "role": "link", "synthetic": True},
+                 fill("n1", "Usuario", rid="com.app:id/user"),
+                 fill("n2", "Código", rid="com.app:id/otp"))
+    after["fingerprint"] = before["fingerprint"]
+    t = FakeTarget([before, after, page()])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1", "DONE"]), learn=False)
+    assert r.run()["status"] == "paused_needs_input"
+    t._advance()
+    out = r.resume(input="482913")
+    assert out["status"] == "done" and t.acted[0] == ("n2", "482913")

@@ -98,7 +98,10 @@ def test_webview_text_under_clickable_ancestor_not_duplicated():
 
 def test_webview_links_have_unique_sequential_ids():
     acts = [a for a in page()["actions"] if "bounds" in a]
-    assert [a["id"] for a in acts] == [f"n{i}" for i in range(len(acts))]
+    real = [a for a in acts if not a.get("synthetic")]
+    links = [a for a in acts if a.get("synthetic")]
+    assert links and [a["id"] for a in real] == [f"n{i}" for i in range(len(real))]
+    assert [a["id"] for a in links] == [f"w{i}" for i in range(len(links))]
 
 
 def test_plain_text_outside_webview_not_actionable():
@@ -173,3 +176,49 @@ def test_nested_same_text_synthesizes_one_link():
     p = parse_hierarchy(xml, "com.app", "Main")
     links = [a["bounds"] for a in p["actions"] if a.get("role") == "link"]
     assert links == [[0, 100, 500, 300], [600, 100, 900, 300]]  # separate one elsewhere kept
+
+
+def _edit(text, rid="com.app:id/f", password=False, hint="", bounds="[10,300][900,400]"):
+    return (f'<node package="com.app" class="android.widget.EditText" text="{text}" hint="{hint}"'
+            f' resource-id="{rid}" password="{"true" if password else "false"}" clickable="true"'
+            f' enabled="true" bounds="{bounds}"/>')
+
+
+def test_password_edittext_text_blanked_everywhere():
+    xml = ('<hierarchy><node package="com.app" class="android.widget.FrameLayout" enabled="true"'
+           ' bounds="[0,0][1000,2000]">'
+           + _edit("hunter2secret", rid="com.app:id/pw", password=True)
+           # a disabled password node is not an action but must not leak as page text
+           + '<node package="com.app" class="android.widget.EditText" text="disabledSecret"'
+           ' password="true" enabled="false" bounds="[10,500][900,600]"/>'
+           # an unlabeled field just below: the password text must not become its label
+           + _edit("", rid="", bounds="[10,620][900,700]")
+           + '</node></hierarchy>')
+    p = parse_hierarchy(xml, "com.app", "Main")
+    blob = repr(p)
+    assert "hunter2secret" not in blob and "disabledSecret" not in blob
+    pw = next(a for a in p["actions"] if a.get("resource_id") == "com.app:id/pw")
+    assert pw["password"] and pw["value"] == ""
+
+
+def test_edittext_emits_hint():
+    xml = ('<hierarchy><node package="com.app" class="android.widget.FrameLayout" enabled="true"'
+           ' bounds="[0,0][1000,2000]">' + _edit("482913", rid="com.app:id/etOtp", hint="Código")
+           + '</node></hierarchy>')
+    a = next(a for a in parse_hierarchy(xml, "com.app", "Main")["actions"] if a.get("kind") == "fill")
+    assert a["label"] == "482913" and a["hint"] == "Código"
+
+
+def test_synthetic_links_have_own_id_namespace():
+    plain = parse_hierarchy(_webview_xml(), "com.app", "Main")
+    ids = {a["label"]: a["id"] for a in plain["actions"] if "bounds" in a}
+    assert ids == {"Su sesión expira en 4:59": "w0", "Ingresar": "n0"}
+    # a link appearing above a real element never shifts the real element's id
+    xml = _webview_xml().replace(
+        '<node package="com.app" class="android.widget.TextView"',
+        '<node package="com.app" class="android.widget.TextView" text="Nuevo" enabled="true"'
+        ' bounds="[10,5][900,9]"/><node package="com.app" class="android.widget.TextView"', 1)
+    more = parse_hierarchy(xml, "com.app", "Main")
+    real = [a for a in more["actions"] if "bounds" in a and not a.get("synthetic")]
+    assert [(a["id"], a["label"]) for a in real] == [("n0", "Ingresar")]
+    assert [a["id"] for a in more["actions"] if a.get("synthetic")] == ["w0", "w1"]

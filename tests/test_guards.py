@@ -136,3 +136,17 @@ def test_scrub_value_recurses():
     from jev_runner.guards import scrub_value
     v = {"a": ["482913", ("x 482913",)], "b": 482913, "c": "4829130"}
     assert scrub_value(v, ["482913"]) == {"a": ["•••", ("x •••",)], "b": "•••", "c": "4829130"}
+
+
+def test_secret_field_checks_hint_and_resource_id_tail(cfg):
+    p = cfg.secret_patterns
+    assert is_secret_field({"kind": "fill", "label": "482913", "hint": "Código"}, p)
+    assert is_secret_field({"kind": "fill", "label": "482913", "resource_id": "com.app:id/etOtp"}, p)
+    assert is_secret_field({"kind": "fill", "label": "x", "resource_id": "com.app:id/pin_input"}, p)
+    assert not is_secret_field({"kind": "fill", "label": "x", "resource_id": "com.app:id/etName"}, p)
+    assert not is_secret_field({"kind": "fill", "label": "x", "resource_id": "com.app:id/spinner"}, p)
+
+
+def test_scrub_cleans_action_hint():
+    out = scrub({"actions": [{"label": "x", "hint": "Clave 482913"}]}, ["482913"])
+    assert out["actions"][0]["hint"] == "Clave •••"

@@ -42,11 +42,12 @@ class _N:
         self.pkg = a.get("package", "")
         self.cls = a.get("class", "")
         self.rid = a.get("resource-id", "")
-        self.text = _clean(a.get("text"))
+        self.password = a.get("password") == "true"
+        # a password field's text is the secret itself (or its mask): never surface it
+        self.text = "" if self.password else _clean(a.get("text"))
         self.desc = _clean(a.get("content-desc"))
         self.hint = _clean(a.get("hint"))
         self.bounds = _bounds(a.get("bounds"))
-        self.password = a.get("password") == "true"
         self.scrollable = a.get("scrollable") == "true"
         self.included = False
         self.children = []
@@ -176,7 +177,8 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
 
     actions = []
     text_nodes = []  # (bottom, text) of preceding included text nodes
-    synthetic = []  # WebView text links emitted so far
+    synthetic = []  # WebView text links emitted so far (own id namespace: w0, w1, ...)
+    real = 0  # element actions emitted so far (ids n0, n1, ...)
     scroll = False
     for i, n in enumerate(nodes):
         if not n.included:
@@ -209,8 +211,8 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
                 label = tail
             role = _ROLES.get(n.cls.rsplit(".", 1)[-1], "button")
             act = {
-                "id": f"n{len(actions)}",
-                "node": len(actions),
+                "id": f"n{real}",
+                "node": real,
                 "kind": "fill" if is_edit else "click",
                 "label": label,
                 "role": role,
@@ -219,6 +221,9 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
                 "bounds": n.bounds,
                 "password": n.password,
             }
+            if n.hint:
+                act["hint"] = n.hint
+            real += 1
             if n.flag("checkable"):
                 act["checked"] = "true" if n.flag("checked") else "false"
             actions.append(act)
@@ -226,9 +231,10 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
             a["label"] == (n.text or n.desc) and _contains(a["bounds"], n.bounds)
             for a in synthetic
         ):
+            # separate ids: a link appearing never shifts the ids of real elements
             synthetic.append({
-                "id": f"n{len(actions)}",
-                "node": len(actions),
+                "id": f"w{len(synthetic)}",
+                "node": f"w{len(synthetic)}",
                 "kind": "click",
                 "label": n.text or n.desc,
                 "role": "link",
