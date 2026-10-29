@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; ~200 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 281 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -47,7 +47,7 @@ Read, in order:
 | 9 jevd daemon + client | done, reviewed |
 | 10 MCP tools, rename to jev-runner, README | done, reviewed |
 | 11 on-device verification | ran; found 5 bugs → fixed and reviewed (commits e277fcf, cc3caf8, dc7c691, 957effd); live relay check passed |
-| Final whole-branch review | **in progress** (main..957effd) |
+| Final whole-branch review | done; fixes applied (sticky secret detection + scrubbed history/results, hint + password blanking, `w` ids for WebView links, locator-checked resume, ambiguous amounts rejected, single android lock + `unknown_device`, AdbLink lock, config list validation, shutdown money warning, docs) — 281 tests |
 | Finish (merge/PR decision, optional repo folder rename to `jev-runner`) | **not started — ask Eduardo** |
 
 ### Task 11 fixes (done — kept here for context)
@@ -63,18 +63,15 @@ Findings from the real Redmi Pad (details in the spec's "Verification results" a
 - (d) `adb tcpip` on first USB attach restarts adbd → "AdbError: closed". Fix: poll until device is back.
 - (e) stale `127.0.0.1:5556 offline` adb entry hangs later runs. Fix: `adb disconnect` before connect and on close.
 
-Check `git log` for commits after `d00063d` to see which of these landed. Verify with
-`uv run pytest -q`; for (a) a live check needs the tablet on USB + the Bash sandbox off.
+Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + the Bash sandbox off.
 
 ## How to continue
 
 1. `git checkout feat/multi-target && uv sync && uv run pytest -q` — must be green.
-2. Task 11 fixes are done (232 tests). Synthetic WebView links are excluded from fingerprints and flow signatures.
-3. Run a whole-branch review of `main..feat/multi-target` against the spec. Deferred minor
-   findings to triage are listed in the ledger (`grep "minor (deferred)"`); the notable ones:
-   password EditText node text not blanked in page text; tab leak if Chrome attach fails after
-   createTarget; resolve_app cost; status docstring overstates fields; README lacks `jevd.stderr`
-   and a restart command (`pkill -f jev_runner.daemon`).
+2. Task 11 fixes and the final whole-branch review fixes are done (281 tests). Synthetic
+   WebView links are excluded from fingerprints and flow signatures and use their own ids (`w0`, …).
+3. Remaining deferred minors (ledger, `grep "minor (deferred)"`): tab leak if Chrome attach
+   fails after createTarget; resolve_app cost.
 4. Ask Eduardo how to finish (merge to main / PR / keep branch) and whether to rename the repo folder.
 
 ## Non-negotiable safety rules (do not weaken)

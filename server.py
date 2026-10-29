@@ -48,7 +48,9 @@ def run_task(
       manually, then call `end_session` (the session is terminal).
     Results may include `flow_used` / `flow_saved` / `flow_updated` (learned flows replay
     cheaply; pass `learn=False` to disable auto-save/self-heal, `flow`/`save_as` to name
-    one). `device_busy` errors name the session holding the device.
+    one). `device_busy` errors name the session holding the device. `device` may be omitted,
+    "default", or the configured android_serial (one phone; all android sessions share its
+    lock); anything else fails with `unknown_device`.
     """
     return _call("run_task", {
         "target": target, "goal": goal, "url_or_app": url_or_app, "params": params,
@@ -86,7 +88,9 @@ def end_session(session_id: str) -> dict:
 
 @mcp.tool()
 def status() -> dict:
-    """Show daemon status: open sessions, device holders and configured targets."""
+    """Show daemon status: `sessions` (each with session_id, target, status and idle_s),
+    `android` (`serial` last reached and whether it is `connected`) and `flows` (count of
+    saved flows)."""
     return _call("status", {})
 
 

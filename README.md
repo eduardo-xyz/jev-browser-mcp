@@ -26,7 +26,7 @@ keys). Set the keys, then restart `jevd` so it picks them up.
 | `resume(session_id, input?, instruction?, confirm=False)` | Continue a paused session. |
 | `screenshot(session_id)` | Save a screenshot; returns a file path. |
 | `end_session(session_id)` | Close the session and release the device. |
-| `status()` | Daemon, sessions and device holders. |
+| `status()` | `sessions` (id, target, status, `idle_s`), `android` (`serial`, `connected`), `flows` (count). |
 | `list_flows()` / `delete_flow(name)` | Manage saved flows. |
 
 Usage rules: one `run_task` call per goal. Statuses: `paused_needs_input` means ask the user
@@ -34,6 +34,11 @@ and call `resume(input=...)`; `paused_mismatch` means show `expected`/`seen` and
 `resume(confirm=True)` only after the user approves; `error` with reason
 `money_action_uncertain` is terminal -- have the user check the app manually, then
 `end_session`. A `device_busy` error names the session holding the device.
+
+`device`: one Android phone is supported (the one in `config.toml`). Omit it, or pass
+`"default"` or the configured `android_serial`; every Android session shares that phone's
+lock, so a second Android run while one is paused/running gets `device_busy`. Any other
+value fails with `unknown_device: <value>`.
 
 ## Setup
 
@@ -53,7 +58,12 @@ and call `resume(input=...)`; `paused_mismatch` means show `expected`/`seen` and
 ### Data directory and config
 
 Everything lives in `$JEV_DATA_DIR` (optional), default `~/.local/share/jev-runner/`:
-`jevd.sock`, `config.toml`, `flows/`, `receipts/`, `jevd.log`.
+`jevd.sock`, `jevd.lock`, `config.toml`, `flows/`, `receipts/`, `screens/` (screenshots),
+`jevd.log`, `jevd.stderr` (daemon startup errors).
+
+Restart the daemon (e.g. after setting keys or editing `config.toml`; the next tool call
+autostarts it): `pkill -f jev_runner.daemon`. List-typed keys must be lists of strings;
+a wrong type makes the daemon refuse to start (see `jevd.stderr`).
 
 Example `config.toml` (all keys optional):
 
