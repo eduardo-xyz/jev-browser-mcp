@@ -62,6 +62,10 @@ class TcpRelay:
         srv, self._listener = self._listener, None
         if srv is not None:
             try:
+                srv.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
                 srv.close()
             except OSError:
                 pass
@@ -133,70 +137,98 @@ class AdbLink:
         self._clock = clock
         self.relay: TcpRelay | None = None
         self._tcpip_done = False
+        self._relay_busy = False
 
-    def _adb(self, *args: str):
-        return self._run(["adb", *args], capture_output=True, text=True, timeout=15)
+    def _timeout(self, deadline: float, cap: float = 15) -> float:
+        return min(cap, max(1.0, deadline - self._clock()))
 
-    def _device_states(self) -> dict[str, str]:
+    def _expired(self, deadline: float) -> bool:
+        return self._clock() >= deadline
+
+    def _adb(self, deadline: float, *args: str):
+        return self._run(["adb", *args], capture_output=True, text=True,
+                         timeout=self._timeout(deadline))
+
+    def _device_states(self, deadline: float) -> dict[str, str]:
         try:
-            out = self._adb("devices").stdout or ""
+            out = self._adb(deadline, "devices").stdout or ""
         except (OSError, subprocess.SubprocessError):
             return {}
         states = {}
-        for line in out.splitlines()[1:]:
+        seen_header = False
+        for line in out.splitlines():
+            if not seen_header:
+                seen_header = line.strip().startswith("List of devices attached")
+                continue
             parts = line.split()
             if len(parts) >= 2:
                 states[parts[0]] = parts[1]
         return states
 
-    def _ip(self) -> str | None:
+    def _ip(self, deadline: float) -> str | None:
         ip = None
         if self.cfg.android_mdns:
             try:
-                ip = self._resolve(self.cfg.android_mdns)
+                ip = self._resolve(self.cfg.android_mdns, timeout=self._timeout(deadline, 3.0))
             except Exception:
                 ip = None
         return ip or self.cfg.android_ip
 
     def _ensure_relay(self, ip: str) -> None:
+        """Raises OSError if the relay port cannot be bound."""
         if self.relay is None:
-            self.relay = TcpRelay(self.cfg.relay_port, ip, self.cfg.adb_tcp_port)
-            self.relay.start()
+            relay = TcpRelay(self.cfg.relay_port, ip, self.cfg.adb_tcp_port)
+            relay.start()
+            self.relay = relay
         elif self.relay.host != ip:
             self.relay.retarget(ip)
 
-    def _attempt(self) -> str | None:
+    def _attempt(self, deadline: float) -> str | None:
         usb = self.cfg.android_serial
-        if usb and self._device_states().get(usb) == "device":
+        if usb and self._device_states(deadline).get(usb) == "device":
             if not self._tcpip_done:
                 self._tcpip_done = True
                 try:
-                    self._adb("-s", usb, "tcpip", str(self.cfg.adb_tcp_port))
+                    self._adb(deadline, "-s", usb, "tcpip", str(self.cfg.adb_tcp_port))
                 except (OSError, subprocess.SubprocessError):
                     pass
             return usb
-        ip = self._ip()
-        if not ip:
+        if self._expired(deadline):
             return None
-        self._ensure_relay(ip)
+        ip = self._ip(deadline)
+        if not ip or self._expired(deadline):
+            return None
+        try:
+            self._ensure_relay(ip)
+        except OSError:
+            self._relay_busy = True
+            return None
+        self._relay_busy = False
+        if self._expired(deadline):
+            return None
         wireless = f"127.0.0.1:{self.cfg.relay_port}"
         try:
-            self._adb("connect", wireless)
+            self._adb(deadline, "connect", wireless)
         except (OSError, subprocess.SubprocessError):
             return None
-        return wireless if self._device_states().get(wireless) == "device" else None
+        if self._expired(deadline):
+            return None
+        return wireless if self._device_states(deadline).get(wireless) == "device" else None
 
     def ensure_connected(self) -> str:
         deadline = self._clock() + self.cfg.reconnect_window_s
         while True:
-            serial = self._attempt()
+            serial = self._attempt(deadline)
             if serial:
                 return serial
-            if self._clock() >= deadline:
-                raise DeviceDisconnected(
-                    f"Android device not reachable within {self.cfg.reconnect_window_s}s")
+            if self._expired(deadline):
+                msg = f"Android device not reachable within {self.cfg.reconnect_window_s}s"
+                if self._relay_busy:
+                    msg += f" (relay port {self.cfg.relay_port} is busy)"
+                raise DeviceDisconnected(msg)
             self._sleep(1)
 
     def close(self) -> None:
-        if self.relay:
-            self.relay.stop()
+        relay, self.relay = self.relay, None
+        if relay:
+            relay.stop()

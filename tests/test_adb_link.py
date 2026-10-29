@@ -21,12 +21,19 @@ class FakeAdb:
         self.calls = []
         self.devices = []
         self.on_connect = None
+        self.on_call = None
+        self.timeouts = []
+        self.preamble = ""
 
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
+        self.timeouts.append(kw.get("timeout"))
+        if self.on_call:
+            self.on_call(argv)
         out = ""
         if argv[:2] == ["adb", "devices"]:
-            out = "List of devices attached\n" + "".join(d + "\n" for d in self.devices)
+            out = (self.preamble + "List of devices attached\n"
+                   + "".join(d + "\n" for d in self.devices))
         elif argv[:2] == ["adb", "connect"] and self.on_connect:
             self.on_connect()
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
@@ -175,3 +182,89 @@ def test_gives_up_after_window_and_raises(fake_adb, fake_clock, cfg_android):
     with pytest.raises(DeviceDisconnected):
         link.ensure_connected()
     assert fake_clock.now() >= 30
+
+
+def _busy_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen()
+    return s, s.getsockname()[1]
+
+
+def test_busy_relay_port_raises_disconnected_then_recovers(fake_adb, fake_clock, cfg_android):
+    blocker, rp = _busy_port()
+    cfg_android.relay_port = rp
+    fake_adb.on_connect = lambda: fake_adb.devices.append(f"127.0.0.1:{rp}\tdevice")
+    link = AdbLink(cfg_android, run=fake_adb, resolve=lambda *a, **k: "192.168.1.215",
+                   sleep=fake_clock.sleep, clock=fake_clock.now)
+    with pytest.raises(DeviceDisconnected, match="busy"):
+        link.ensure_connected()
+    assert link.relay is None
+    blocker.close()
+    try:
+        assert link.ensure_connected() == f"127.0.0.1:{rp}"
+        assert link.relay is not None
+    finally:
+        link.close()
+
+
+def test_subprocess_timeouts_bounded_by_remaining(fake_adb, fake_clock, cfg_android):
+    cfg_android.reconnect_window_s = 2
+    seen = []
+    link = AdbLink(cfg_android, run=fake_adb,
+                   resolve=lambda name, timeout=3.0: seen.append(timeout),
+                   sleep=fake_clock.sleep, clock=fake_clock.now)
+    with pytest.raises(DeviceDisconnected):
+        link.ensure_connected()
+    assert fake_adb.timeouts[0] <= 2
+    assert all(t is not None and 1 <= t <= 15 for t in fake_adb.timeouts)
+    assert seen and seen[0] <= 2
+
+
+def test_deadline_checked_between_substeps(fake_adb, fake_clock, cfg_android):
+    cfg_android.reconnect_window_s = 5
+    fake_adb.on_call = lambda argv: setattr(fake_clock, "t", fake_clock.t + 20)  # slow adb
+    link = AdbLink(cfg_android, run=fake_adb, resolve=lambda *a, **k: "192.168.1.215",
+                   sleep=fake_clock.sleep, clock=fake_clock.now)
+    with pytest.raises(DeviceDisconnected):
+        link.ensure_connected()
+    assert not any(c[:2] == ["adb", "connect"] for c in fake_adb.calls)
+    assert link.relay is None
+
+
+def test_close_resets_relay_and_restart_works(fake_adb, cfg_android):
+    cfg_android.relay_port = rp = free_port()
+    fake_adb.on_connect = lambda: fake_adb.devices.append(f"127.0.0.1:{rp}\tdevice")
+    link = AdbLink(cfg_android, run=fake_adb, resolve=lambda *a, **k: "192.168.1.215")
+    link.ensure_connected()
+    link.close()
+    assert link.relay is None
+    link.ensure_connected()
+    try:
+        assert link.relay is not None
+        socket.create_connection(("127.0.0.1", rp), timeout=1).close()
+    finally:
+        link.close()
+
+
+@pytest.mark.parametrize("state", ["unauthorized", "offline"])
+def test_non_device_states_not_connected(fake_adb, fake_clock, cfg_android, state):
+    fake_adb.devices = [f"zdirl7t84pqwh6ww\t{state}"]
+    link = AdbLink(cfg_android, run=fake_adb, resolve=lambda *a, **k: None,
+                   sleep=fake_clock.sleep, clock=fake_clock.now)
+    with pytest.raises(DeviceDisconnected):
+        link.ensure_connected()
+    assert not any("tcpip" in c for c in fake_adb.calls)
+
+
+def test_devices_parsing_skips_daemon_preamble(fake_adb, cfg_android):
+    fake_adb.preamble = "* daemon not running; starting now at tcp:5037\n* daemon started successfully\n"
+    fake_adb.devices = ["zdirl7t84pqwh6ww\tdevice"]
+    assert AdbLink(cfg_android, run=fake_adb).ensure_connected() == "zdirl7t84pqwh6ww"
+
+
+def test_stop_shuts_down_listener():
+    relay = TcpRelay(free_port(), "127.0.0.1", 1)
+    relay.start()
+    relay.stop()
+    assert relay._listener is None
