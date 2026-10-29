@@ -96,3 +96,15 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
 - `adb` itself is also blocked from the LAN by macOS → always connect through `127.0.0.1:5556` relay.
 - No `TYPESAFE_API_KEY` yet → real Jev decisions are untested end to end; say so when reporting.
 - Commit messages end with `Co-Authored-By:` attribution per the repo's convention; don't push or merge without Eduardo.
+
+## Known residuals after final review (2026-10-29)
+
+Final whole-branch review + fix wave done (281 tests green). Open items, not yet fixed:
+- **Important:** `guards.parse_amount` still misreads malformed amounts instead of failing closed:
+  `".5"`/`",5"` → 5, `"1.5000"` → 15000. Fix: accept a separator only as grouped thousands
+  (`\d{1,3}([.,]\d{3})+`) or a 2-digit decimal; anything else → None.
+- `result.build` scrubs the whole result, so a `session_id`/flow name containing a secret's digit
+  run (≈1e-4 for a 4-digit PIN) gets mangled and can't be resumed. Fix: exclude `session_id` and `flow_*`.
+- Minor: sticky secret detection over-triggers on apps reusing one EditText resource-id; history
+  recorded before a value became secret isn't re-scrubbed; scalar config fields unvalidated;
+  `Daemon.close` can wait ~30 s behind an in-flight reconnect.
