@@ -335,22 +335,22 @@ def test_connect_error_inside_input_maps_to_disconnected(fake_device, link):
 
 
 def test_resolve_app_survives_connection_error_via_reconnect(link):
-    d = _dev_with_apps({"com.whatsapp": "WhatsApp"})
-    d.info_errors["com.whatsapp"] = (ConnectionError("x"),)
+    d = _dev_with_apps({"com.wa.messenger": "WhatsApp"})
+    d.info_errors["com.wa.messenger"] = (ConnectionError("x"),)
     t = mk(link, d, app="whatsapp")
-    assert ("app_start", "com.whatsapp") in d.calls
+    assert ("app_start", "com.wa.messenger") in d.calls
     assert link.ensure_calls == 2
 
 
 def test_resolve_app_does_not_cache_failures():
-    d = _dev_with_apps({"com.whatsapp": "WhatsApp", "b.c": "Other"})
-    d.info_errors["com.whatsapp"] = ValueError("flaky")
+    d = _dev_with_apps({"com.wa.messenger": "WhatsApp", "b.c": "Other"})
+    d.info_errors["com.wa.messenger"] = ValueError("flaky")
     cache = {}
     with pytest.raises(TargetBlocked):
         resolve_app(d, "whatsapp", cache)
-    assert "com.whatsapp" not in cache
-    del d.info_errors["com.whatsapp"]
-    assert resolve_app(d, "whatsapp", cache) == "com.whatsapp"
+    assert "com.wa.messenger" not in cache
+    del d.info_errors["com.wa.messenger"]
+    assert resolve_app(d, "whatsapp", cache) == "com.wa.messenger"
 
 
 def test_resolve_app_blank_name():
@@ -365,3 +365,64 @@ def test_resolve_app_ambiguous_dedupes_labels():
     with pytest.raises(TargetBlocked) as e:
         resolve_app(d, "maps")
     assert e.value.reason == "app_ambiguous: Maps"
+
+
+class NoLabelDevice(FakeDevice):
+    """uiautomator2 on some devices returns app_info without a label."""
+
+    def __init__(self, pkgs):
+        super().__init__()
+        self.shell_out = "\n".join(f"{p}/.Main" for p in pkgs)
+        self.info_calls = 0
+
+    def app_info(self, pkg):
+        self.info_calls += 1
+        return {"versionName": "5.53.0", "versionCode": 553}
+
+
+def test_resolve_app_by_package_token_exact():
+    d = NoLabelDevice(["net.bac.sbe.android", "com.google.android.gm", "com.bacon.app"])
+    assert resolve_app(d, "BAC") == "net.bac.sbe.android"
+    assert d.info_calls == 0  # token match never reads labels
+
+
+def test_resolve_app_by_package_token_prefix():
+    d = NoLabelDevice(["net.bac.sbe.android", "com.whatsapp"])
+    assert resolve_app(d, "whats") == "com.whatsapp"
+
+
+def test_resolve_app_token_ambiguous():
+    d = NoLabelDevice(["net.bac.sbe.android", "cr.bac.empresas"])
+    with pytest.raises(TargetBlocked) as e:
+        resolve_app(d, "bac")
+    assert e.value.reason.startswith("app_ambiguous:")
+    assert "net.bac.sbe.android" in e.value.reason and "cr.bac.empresas" in e.value.reason
+
+
+def test_resolve_app_no_token_no_label_not_found():
+    d = NoLabelDevice(["com.google.android.gm"])
+    with pytest.raises(TargetBlocked) as e:
+        resolve_app(d, "Gmail")
+    assert e.value.reason == "app_not_found: Gmail"
+
+
+def test_resolve_app_falls_back_to_labels_when_no_token():
+    d = _dev_with_apps({"com.google.android.gm": "Gmail", "a.b": "Maps"})
+    assert resolve_app(d, "gmail") == "com.google.android.gm"
+
+
+def test_label_cache_shared_via_link(link):
+    link.app_labels = {}
+    d = _dev_with_apps({"com.google.android.gm": "Gmail"})
+    calls = {"n": 0}
+    orig = d.app_info
+
+    def counting(pkg):
+        calls["n"] += 1
+        return orig(pkg)
+
+    d.app_info = counting
+    mk(link, d, app="Gmail")
+    mk(link, d, app="Gmail")  # second target on the same daemon link: cached
+    assert calls["n"] == 1
+    assert link.app_labels == {"com.google.android.gm": "Gmail"}

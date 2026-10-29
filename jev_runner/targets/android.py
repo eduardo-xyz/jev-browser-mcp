@@ -36,14 +36,15 @@ def _shell_text(res) -> str:
     return res if isinstance(res, str) else (getattr(res, "output", "") or "")
 
 
-def resolve_app(d, name: str, cache: dict | None = None) -> str:
-    """Resolve a human app name to a package among launchable apps."""
-    cache = cache if cache is not None else {}
-    pkgs = []
-    for line in _shell_text(d.shell(_LAUNCHER_CMD)).splitlines():
-        m = _COMPONENT.match(line.strip())
-        if m and m.group(1) not in pkgs:
-            pkgs.append(m.group(1))
+def _by_package_tokens(pkgs: list[str], want: str) -> list[str]:
+    """Packages with a dot-separated token equal to (else starting with) the name."""
+    want = want.replace(" ", "")
+    tokens = {p: [normalize(t).replace(" ", "") for t in p.split(".")] for p in pkgs}
+    exact = [p for p in pkgs if want in tokens[p]]
+    return exact or [p for p in pkgs if any(t.startswith(want) for t in tokens[p])]
+
+
+def _by_labels(d, pkgs: list[str], want: str, cache: dict) -> tuple[list[str], dict]:
     labels = {}
     for pkg in pkgs:
         if pkg not in cache:
@@ -53,20 +54,42 @@ def resolve_app(d, name: str, cache: dict | None = None) -> str:
                 raise
             except Exception:
                 continue  # unreadable label: skip, and don't cache the failure
-        labels[pkg] = cache[pkg]
+        if cache[pkg]:
+            labels[pkg] = cache[pkg]
+    exact = [p for p, l in labels.items() if normalize(l) == want]
+    if not exact:
+        exact = [p for p, l in labels.items() if normalize(l).startswith(want)]
+    if not exact:
+        exact = [p for p, l in labels.items() if want in normalize(l)]
+    return exact, labels
+
+
+def resolve_app(d, name: str, cache: dict | None = None) -> str:
+    """Resolve a human app name to a package among launchable apps.
+
+    Package-name tokens first (uiautomator2's app_info often has no label: "bac" =>
+    net.bac.sbe.android); launcher labels only when no token matches. `cache` maps
+    package -> label and should live as long as the daemon (AdbLink.app_labels).
+    """
+    cache = cache if cache is not None else {}
     want = normalize(name)
     if not want:
         raise TargetBlocked(f"app_not_found: {name.strip()}")
-    exact = [p for p, l in labels.items() if l and normalize(l) == want]
-    if not exact:
-        exact = [p for p, l in labels.items() if l and normalize(l).startswith(want)]
-    if not exact:
-        exact = [p for p, l in labels.items() if l and want in normalize(l)]
-    if not exact:
+    pkgs = []
+    for line in _shell_text(d.shell(_LAUNCHER_CMD)).splitlines():
+        m = _COMPONENT.match(line.strip())
+        if m and m.group(1) not in pkgs:
+            pkgs.append(m.group(1))
+    found = _by_package_tokens(pkgs, want)
+    names = {p: p for p in found}
+    if not found:
+        found, labels = _by_labels(d, pkgs, want, cache)
+        names = {p: labels[p] for p in found}
+    if not found:
         raise TargetBlocked(f"app_not_found: {name}")
-    if len(exact) > 1:
-        raise TargetBlocked("app_ambiguous: " + ", ".join(sorted({labels[p] for p in exact})))
-    return exact[0]
+    if len(found) > 1:
+        raise TargetBlocked("app_ambiguous: " + ", ".join(sorted(set(names.values()))))
+    return found[0]
 
 
 def _default_connect(serial):
@@ -81,7 +104,9 @@ class AndroidTarget:
     def __init__(self, link, app: str | None = None, connect=None):
         self.link = link
         self._connect = connect or _default_connect
-        self._labels: dict = {}
+        # label cache lives on the daemon's AdbLink so it outlives this target
+        labels = getattr(link, "app_labels", None)
+        self._labels: dict = labels if isinstance(labels, dict) else {}
         self.d = None
         self._dev()
         if app:
