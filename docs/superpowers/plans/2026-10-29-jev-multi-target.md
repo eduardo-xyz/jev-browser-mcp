@@ -904,3 +904,72 @@ No code unless a bug is found (then fix with a test first).
   on a GHL page and a non-money Android goal. Report results; state
   plainly anything still unverified (money flows, receipts).
 - [ ] **Step 6: Commit** spec timing notes: `"Record on-device verification results"`.
+
+---
+
+### Task 12: Auto-save and self-healing flows (user request, 2026-10-29; execute after Task 7, before Task 8)
+
+**Files:**
+- Modify: `jev_mcp/flows.py`, `jev_mcp/runner.py`
+- Test: `tests/test_flows_learning.py`
+
+**Interfaces:**
+- Consumes: Task 5 `Flow`, `FlowStore`, `flow_from_history`, `slug`; Runner `flow`, `save_as`, `store`.
+- Produces:
+  - `flows.goal_key(goal: str) -> str` — `guards.normalize(goal)` with every
+    digit run removed and whitespace collapsed (so "pay water 15000" and
+    "pay water 16000" share a key).
+  - `flows.auto_name(target: str, start: str | None, goal: str) -> str` —
+    `"auto-" + slug(f"{target} {start or ''}")[:40] + "-" + sha1(goal_key(goal))[:8]`.
+  - `FlowStore.find(target: str, start: str | None, goal: str) -> Flow | None`
+    — a stored flow with the same `target`, same `start` (package/host;
+    `None` matches any) and `goal_key(flow.goal) == goal_key(goal)`; most
+    recently saved wins. `Flow` gains `updated_at: float` (written on save;
+    absent in old files ⇒ 0).
+  - `Runner(..., learn: bool = True)`:
+    - Auto-save: on `done`, when `learn` and `store` are set, no `save_as`
+      and no `flow` was used, and at least one step was decided by Jev ⇒
+      save under `auto_name(...)`; result `flow_saved=<name>`.
+    - Self-heal: on `done` of a run that used `flow`, when `learn` and
+      `store` are set and at least one step fell back to Jev ⇒ save the
+      run's history as the same flow name (replacing it; keep the flow's
+      `money_params`, union with this run's); result `flow_updated=<name>`.
+      Runs that end paused/blocked/error/max_steps never save or update.
+    - Explicit `save_as` always wins (saved under that name; no auto-save).
+    - Result gains present-only `flow_used=<name>` when a flow drove the run.
+  - Task 9's daemon calls `store.find(target, url_or_app, goal)` when
+    `run_task` has no `flow` and `learn` is true, and passes the match as
+    `flow`; `run_task` gains `learn: bool = True`.
+
+- [ ] **Step 1: Write failing tests:**
+
+```python
+def test_first_run_autosaves_and_second_run_replays(tmp_path, cfg):
+    store = FlowStore(tmp_path)
+    r1 = run_pay(store, amount=15000, choices=["n1", "n2", "DONE"])      # Jev decides 2 steps
+    assert r1["flow_saved"].startswith("auto-")
+    flow = store.find("android", "com.example.water", "pay water bill 16000")
+    assert flow is not None and flow.name == r1["flow_saved"]
+    r2 = run_pay(store, amount=16000, flow=flow, choices=["DONE"])
+    assert r2["model_calls"] == 1 and r2["flow_used"] == flow.name and "flow_updated" not in r2
+
+def test_fallback_then_success_heals_flow(tmp_path, cfg):
+    # flow recorded on [A, B, C]; app now shows [A, X, C] where X replaces B.
+    # Replay: A replayed, X decided by Jev, C replayed, DONE ⇒ flow_updated; stored steps now A, X, C.
+    # Third run on [A, X, C] replays everything: model_calls == 1.
+
+def test_failed_or_paused_runs_never_save(tmp_path, cfg):
+    # blocked run with learn=True ⇒ no files in store; paused_mismatch ⇒ no files.
+
+def test_learn_false_disables_both(tmp_path, cfg): ...
+
+def test_goal_key_ignores_numbers():
+    assert goal_key("Pay water 15000") == goal_key("pay  water 16.000")
+```
+
+(Write the commented tests concretely with `tests/fakes.py` helpers.)
+
+- [ ] **Step 2: Run** `uv run pytest tests/test_flows_learning.py -v` — FAIL.
+- [ ] **Step 3: Implement** in `flows.py` and `runner.py`; secrets and guards unchanged (flows still never store secrets).
+- [ ] **Step 4: Run** `uv run pytest -v` — PASS.
+- [ ] **Step 5: Commit** `"Auto-save and self-heal flows"`.
