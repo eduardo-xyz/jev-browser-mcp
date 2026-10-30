@@ -626,3 +626,25 @@ def test_close_no_money_warning_without_money_attempt(daemon_with_fakes, keys, c
     finally:
         lock.release()
     assert "money action may be in flight" not in caplog.text
+
+
+def test_status_probes_configured_phone(cfg, script, monkeypatch):
+    from dataclasses import replace
+    from jev_runner.targets.base import DeviceDisconnected
+    d = Daemon(replace(cfg, android_serial="abc"), target_factory=script.target_factory,
+               runner_factory=script.runner_factory)
+    try:
+        def ok():
+            d.link.serial = "abc"
+            return "abc"
+        monkeypatch.setattr(d.link, "ensure_connected", ok)
+        assert d.handle({"op": "status", "args": {}})["result"]["android"] == {"serial": "abc", "connected": True}
+
+        def down():
+            d.link.serial = None
+            raise DeviceDisconnected("no device")
+        monkeypatch.setattr(d.link, "ensure_connected", down)
+        st = d.handle({"op": "status", "args": {}})["result"]["android"]
+        assert st == {"serial": None, "connected": False, "error": "no device"}
+    finally:
+        d.close()

@@ -326,11 +326,20 @@ class Daemon:
         now = time.time()
         with self._lock:
             sessions = list(self.sessions.values())
+        android_error = None
+        if self.cfg.android_serial:  # probe, so status tells the truth before the first android run
+            try:
+                self.link.ensure_connected()
+            except DeviceDisconnected as e:
+                android_error = str(e)[:200]
+        android = {"serial": self.link.serial, "connected": self.link.serial is not None}
+        if android_error:
+            android["error"] = android_error
         return {
             "sessions": [{"session_id": s.session_id, "target": s.kind, "status": s.status(),
                           "idle_s": round(max(0.0, now - s.idle_since()), 1)}
                          for s in sessions],
-            "android": {"serial": self.link.serial, "connected": self.link.serial is not None},
+            "android": android,
             "flows": len(self.store.list()),
         }
 
