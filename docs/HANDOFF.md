@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; 287 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 292 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -124,6 +124,11 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   open exact chat (Jev correctly stopped when the saved name differed from the goal's) → attach → send photo → send text.
   Status is unreliable both ways: the photo send reported `blocked` although the photo was sent. Jev also tapped
   "Allow all" on a photo-permission prompt without being told to. Next: supervised Smart-Bot transactions.
+
+- 2026-10-30 second-opinion check (`jev_runner/verify.py`, commit da4836c) live: self-message learned only after the
+  check confirmed it (42.6 s, 10 Jev calls); replay from cold WhatsApp correct, 28.2 s, 5 Jev calls, self-healed
+  because WhatsApp's search screen differs between runs (recent-searches list), so steps fell back to Jev.
+  Replays are only partially faster on screens that vary; the Jev API also returned HTTP 529 (overloaded) once.
 
 ## Known residuals after final review (2026-10-29)
 
