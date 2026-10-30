@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; 297 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 301 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -147,6 +147,17 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   (`touch.down`, `resourceIdMatches`) — i.e. the bot also drove the tablet directly, outside jev-runner's guards.
   Next: generic WebView click fallback in AndroidTarget; build skills/app notes; agent guide rule that money taps go
   only through jev-runner.
+
+- 2026-10-30 17:01–17:09 Claude drove the HERSULI rent ($900 *2837 → CR77…1775, 'Casa Octubre', ref 406475275)
+  and shared the comprobante to WhatsApp 'Lilly Yamuni' with caption. Login and show-accounts replayed learned flows
+  (login 14.6 s, 1 model call). Open issues seen: (a) approving a navigation 'Transferir' counts as the run's money
+  action and saves a receipt; (b) keyboard covering 'Continuar' made Jev BLOCKED (no hide-keyboard action);
+  (c) the fill focus check raised stale_page when the keypad scrolled the field — needs one automatic retry;
+  (d) after scrolling, the confirm screen no longer showed the recipient IBAN, so the guard paused (correct, but
+  a run could remember what it saw earlier in the same form); (e) the Android share sheet worked once observed late;
+  (f) uiautomator2 types via the clipboard — now cleared after every fill (keyboard clipboard history may still
+  keep values: tell Eduardo to clear/disable it on the tablet); (g) a run_task with url_or_app while another app
+  is in front relaunches that app (likely Grok's 'BAC minimized').
 
 ## Known residuals after final review (2026-10-29)
 

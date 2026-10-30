@@ -442,3 +442,12 @@ def test_launch_settle_gives_up_after_timeout(fake_device, link, monkeypatch):
     splash = '<hierarchy><node package="com.other.app" class="android.widget.FrameLayout" enabled="true" bounds="[0,0][1000,2000]"/></hierarchy>'
     fake_device.dump_hierarchy = lambda compressed=False: splash
     mk(link, fake_device, app="com.other.app")  # returns instead of hanging
+
+
+def test_fill_clears_clipboard_after_typing(fake_device, link):
+    fake_device.clipboard = None
+    t = mk(link, fake_device)
+    p = t.observe()
+    f = next(a for a in p["actions"] if a["kind"] == "fill")
+    t.act(f, p, text="s3cret")
+    assert fake_device.calls[-1][0] == "send_keys" and fake_device.clipboard == ""

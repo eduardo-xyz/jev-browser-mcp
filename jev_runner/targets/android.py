@@ -190,6 +190,12 @@ class AndroidTarget:
                     if not (fb["left"] <= cx <= fb["right"] and fb["top"] <= cy <= fb["bottom"]):
                         raise StalePage()  # focus landed elsewhere; nothing typed yet
                     d.send_keys(text or "", clear=True)
+                    # uiautomator2 types by pasting from the clipboard: never leave the value
+                    # (often a password or code) there for other apps or keyboard history
+                    try:
+                        d.clipboard = ""
+                    except Exception:
+                        pass
 
             self._input(tap)
         elif kind == "back":
