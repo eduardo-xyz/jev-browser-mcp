@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; 286 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 287 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -118,6 +118,12 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   Pending user task: ChatGPT orange-cat image → WhatsApp to the user's wife (exact chat name "Grethel Sánchez";
   user approved sending) + a text saying it's a test. Do it in steps, learn=False, verify chat header by screenshot
   before sending. `git push origin main` was blocked by the permission classifier — user must run it.
+
+- 2026-10-30 cat test passed, run in verified steps (learn=False, screenshot checks between steps):
+  ChatGPT generate (prompt text must be in goal) → save (needed the new unlabelled-element labels) → WhatsApp
+  open exact chat (Jev correctly stopped when the saved name differed from the goal's) → attach → send photo → send text.
+  Status is unreliable both ways: the photo send reported `blocked` although the photo was sent. Jev also tapped
+  "Allow all" on a photo-permission prompt without being told to. Next: supervised Smart-Bot transactions.
 
 ## Known residuals after final review (2026-10-29)
 
