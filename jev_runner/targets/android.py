@@ -207,6 +207,19 @@ class AndroidTarget:
             sleep(0.3)
         sleep(0.15)
 
+    def press(self, action: dict) -> None:
+        """Touch down, hold briefly, release: for web-view elements that ignore a plain click."""
+        l, t, r, b = action["bounds"]
+        cx, cy = (l + r) // 2, (t + b) // 2
+
+        def hold(d):
+            d.touch.down(cx, cy)
+            sleep(0.12)
+            d.touch.up(cx, cy)
+
+        self._input(hold)
+        sleep(0.3)
+
     def screenshot(self, path: Path) -> Path:
         self._call(lambda d: d.screenshot(str(path)))
         return path

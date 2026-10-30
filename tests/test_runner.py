@@ -165,3 +165,28 @@ def test_verify_check_without_key_is_unavailable(monkeypatch):
     importlib.reload(verify)
     monkeypatch.delenv("TEXT_MODEL_API_KEY", raising=False)
     assert verify.check("g", {"text": ""}, []) == (None, "")
+
+
+class _PressTarget(FakeTarget):
+    """Taps on `deaf` ids change nothing; a press advances."""
+    def __init__(self, pages, deaf=()):
+        super().__init__(pages, stuck_ids=deaf)
+        self.pressed = []
+
+    def press(self, action):
+        self.pressed.append(action["id"])
+        self._advance()
+
+
+def test_tap_that_changes_nothing_is_retried_as_press(cfg):
+    t = _PressTarget([page(click("n0", "Ver cuenta")), page()], deaf={"n0"})
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n0", "DONE"]), learn=False)
+    out = r.run()
+    assert out["status"] == "done" and t.pressed == ["n0"] and r.history[0]["pressed"] is True
+
+
+def test_no_press_retry_for_send_confirm_or_checkbox(cfg):
+    for act in [click("n0", "Enviar"), click("n0", "Confirmar"), {**click("n0", "Recordar"), "checked": "false"}]:
+        t = _PressTarget([page(act), page()], deaf={"n0"})
+        Runner("s", t, "g", None, cfg, choose=scripted_choose(["n0", "DONE"]), learn=False).run()
+        assert t.pressed == [], act["label"]

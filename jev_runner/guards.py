@@ -45,6 +45,16 @@ def _label_matches(label: str, labels: list[str]) -> bool:
     return any(m and (label == m or label.startswith(m + " ")) for m in map(normalize, labels))
 
 
+def may_retry_tap(action: dict, cfg: Config) -> bool:
+    """A tap that changed nothing may be repeated as a press only when repeating can't hurt:
+    never a money or send/confirm label, a checkbox/switch, or a text field."""
+    if action.get("kind") != "click" or "checked" in action:
+        return False
+    label = normalize(action.get("label") or "")
+    return not (_label_matches(label, cfg.money_labels)
+                or _label_matches(label, cfg.money_labels_contextual))
+
+
 def is_money_action(action: dict, page: dict, money_params: dict, cfg: Config) -> bool:
     """Strong labels are guarded everywhere; contextual ones only in a money context."""
     if action.get("kind") != "click":

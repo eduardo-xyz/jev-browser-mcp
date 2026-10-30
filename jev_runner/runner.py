@@ -24,6 +24,7 @@ from .guards import (
     check_money,
     is_money_action,
     is_secret_field,
+    may_retry_tap,
     scrub,
     scrub_text,
     scrub_value,
@@ -372,6 +373,10 @@ class Runner:
             seen=scrub_value(check.seen, self.secrets))
         raise _Stop("paused_mismatch", "money_already_attempted" if self.money_attempted else None)
 
+    def _changed(self, before: dict, after: dict) -> bool:
+        return (after.get("fingerprint") != before.get("fingerprint")
+                or self._text_hash(after) != self._text_hash(before))
+
     def _settled(self, page: dict, action: dict, tries: int = 4) -> tuple[dict, dict]:
         """Re-read until two reads agree, so a pause never records a screen still animating."""
         for _ in range(tries):
@@ -510,4 +515,13 @@ class Runner:
         except StalePage:
             self.page = {}
             return
+        if not money and not self._changed(page, after) and may_retry_tap(action, self.cfg) \
+                and hasattr(self.target, "press"):
+            # Some web views ignore a quick tap; look again, then press and hold briefly once.
+            time.sleep(self.settle_delay * 2)
+            after = self.page = self.target.observe()
+            if not self._changed(page, after):
+                self.target.press(action)
+                entry["pressed"] = True
+                after = self.page = self.target.observe()
         entry["page_changed"] = after.get("fingerprint") != page.get("fingerprint")

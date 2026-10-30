@@ -43,6 +43,17 @@ Check with the `status` tool: `android.connected` must be `true`.
 | `error` `money_action_uncertain` | A money tap may or may not have gone through. | Do NOT retry. Check the bank app's movements, then `end_session`. |
 | `error` other | Provider/device problem (e.g. HTTP 529 = Jev overloaded). | Retry once after a few seconds. |
 
+## Only through jev-runner (hard rule)
+
+Never drive the device yourself — no `adb shell input`, no uiautomator2 / `u2` calls
+(`click`, `touch.down`, `resourceIdMatches`, …), no scripts that tap the phone — for anything in
+a banking or payment app, and never for a tap that can move money or send a message.
+Those taps skip every protection: amount/recipient check, one-money-action limit, secret masking,
+receipts and the final-screen check. If jev-runner can't get past a screen, stop and report the
+`session_id`, `reason` and a `screenshot` path; the fix belongs in jev-runner.
+(jev-runner already retries a tap that changed nothing with a short press, which is what web-view
+cards in some bank apps need.)
+
 ## Money rules (enforced in code — do not try to bypass)
 
 - For any payment pass `params={"amount": <number>, "recipient": "<IBAN or account>"}` and
