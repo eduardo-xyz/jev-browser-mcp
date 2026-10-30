@@ -114,6 +114,7 @@ def _desc_text(n):
 
 
 SYSTEMUI = "com.android.systemui"
+_CAPTION_PX = 80  # max gap between an unlabelled icon and the caption under it
 _SHADE_FRACTION = 0.4
 
 
@@ -213,6 +214,13 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
                         label = f"{label} · {tail}"
             if not label:
                 label = tail
+            if not label:
+                # icon button with its caption drawn just below it (tile menus)
+                caps = [(o.bounds[1] - b, o.text or o.desc) for o in inc
+                        if o is not n and (o.text or o.desc) and 0 <= o.bounds[1] - b <= _CAPTION_PX
+                        and o.bounds[0] < r and o.bounds[2] > l]
+                if caps:
+                    label = min(caps, key=lambda c: c[0])[1]
             unlabelled = not label
             if unlabelled:
                 # nothing names it (common for Compose images/cards); say what and how big it is

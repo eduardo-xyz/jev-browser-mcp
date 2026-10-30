@@ -241,3 +241,12 @@ def test_unlabelled_clickable_gets_descriptive_label():
            '</node></hierarchy>')
     labels = [a["label"] for a in parse_hierarchy(xml, "a.b", "M")["actions"] if "bounds" in a]
     assert labels == ["Unlabelled element (945x788 px)", "Unlabelled image (100x100 px)"]
+
+
+def test_unlabelled_icon_takes_caption_below():
+    xml = ('<hierarchy><node package="a.b" class="android.widget.FrameLayout" enabled="true" bounds="[0,0][1600,2560]">'
+           '<node package="a.b" class="android.view.View" clickable="true" enabled="true" bounds="[231,414][346,529]"/>'
+           '<node package="a.b" class="android.widget.TextView" text="Transferir dinero" enabled="true" bounds="[146,585][432,634]"/>'
+           '</node></hierarchy>')
+    acts = [a for a in parse_hierarchy(xml, "a.b", "M")["actions"] if a.get("node") == 0]
+    assert acts[0]["label"] == "Transferir dinero"
