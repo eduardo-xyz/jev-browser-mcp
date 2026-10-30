@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; 292 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 296 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -129,6 +129,14 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   check confirmed it (42.6 s, 10 Jev calls); replay from cold WhatsApp correct, 28.2 s, 5 Jev calls, self-healed
   because WhatsApp's search screen differs between runs (recent-searches list), so steps fell back to Jev.
   Replays are only partially faster on screens that vary; the Jev API also returned HTTP 529 (overloaded) once.
+
+- 2026-10-30 BAC (real money, supervised): login via clipboard → resume worked (password never printed). No money
+  moved: BAC logged out after ~8 min while the money guard paused on navigation tabs ('Transferir o pagar',
+  'Transferir dinero'), a confirm was voided by an animating screen, and Jev tapped an icon's dead caption.
+  Fixed in 8de14c2 (navigation_labels config, settled pauses, caption dedupe) — not yet re-tested live.
+- Hand-off: `docs/AGENT-GUIDE.md` (any agent); private recipe with IBANs outside git at
+  `~/.local/share/jev-runner/recipes/2026-10-bac-transfers.md`. Eduardo decided Smart-Bot (Grok Bot) may approve
+  money pauses itself. Next design: `docs/superpowers/specs/2026-10-30-jev-skills-and-app-notes-design.md`.
 
 ## Known residuals after final review (2026-10-29)
 

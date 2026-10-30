@@ -40,6 +40,8 @@ and call `resume(input=...)`; `paused_mismatch` means show `expected`/`seen` and
 lock, so a second Android run while one is paused/running gets `device_busy`. Any other
 value fails with `unknown_device: <value>`.
 
+Agents driving jev-runner: read [`docs/AGENT-GUIDE.md`](docs/AGENT-GUIDE.md).
+
 ## Setup
 
 1. Install dependencies: `uv sync`
@@ -74,6 +76,7 @@ android_ip = "192.168.1.215"
 relay_python = "/usr/bin/python3"  # interpreter for the wireless relay helper (see below)
 money_apps = []     # app packages/names where contextual labels (Confirm, Send) are guarded
 own_accounts = []   # your own account numbers; transfers to these are recognised as own-account
+navigation_labels = []  # exact button labels you checked only open a menu (never money actions)
 # money_labels and money_labels_contextual have built-in defaults and can be overridden here
 ```
 
