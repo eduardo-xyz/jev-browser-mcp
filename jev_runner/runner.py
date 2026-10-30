@@ -278,7 +278,8 @@ class Runner:
     def _no_progress(self) -> bool:
         last = self.history[-NO_PROGRESS:]
         return len(last) == NO_PROGRESS and all(
-            h["page_changed"] is False and h["kind"] != "wait" for h in last)
+            h["page_changed"] is False and h["kind"] not in ("wait", "fill") for h in last)
+        # typing is progress even when the screen can't show it (password fields are blanked)
 
     def _observe(self) -> dict:
         page = self.page

@@ -535,3 +535,15 @@ def test_money_pause_records_the_settled_screen(cfg):
     out = r.run()
     assert out["status"] == "paused_mismatch"
     assert r.pending["fingerprint"] == still["fingerprint"]
+
+
+def test_password_fill_on_unchanging_screen_is_not_no_progress(cfg):
+    # login screen: tapping the field and typing a (blanked) password leave the screen identical
+    login = page(click("n0", "Contraseña"), fill("n1", "Contraseña · txtPassword", rid="txtPassword"),
+                 click("n2", "Ingresar"))
+    t = FakeTarget([login, login, login, page()], stuck_ids={"n0", "n1"})
+    r = Runner("s", t, "log in", None, cfg, choose=scripted_choose(["n0", "n1", "n2", "DONE"]), learn=False)
+    out = r.run()
+    assert out["status"] == "paused_needs_input"
+    out = r.resume(input="hunter2pass")
+    assert out["status"] == "done", out
