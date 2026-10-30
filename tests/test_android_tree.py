@@ -232,3 +232,12 @@ def test_unlabelled_field_takes_overlay_placeholder_not_far_text():
            '</node></hierarchy>')
     fills = [a for a in parse_hierarchy(xml, "a.b", "M")["actions"] if a["kind"] == "fill"]
     assert [a["label"] for a in fills] == ["Ask ChatGPT"]
+
+
+def test_unlabelled_clickable_gets_descriptive_label():
+    xml = ('<hierarchy><node package="a.b" class="android.widget.FrameLayout" enabled="true" bounds="[0,0][1000,2000]">'
+           '<node package="a.b" class="android.view.View" clickable="true" enabled="true" bounds="[36,414][981,1202]"/>'
+           '<node package="a.b" class="android.widget.ImageView" clickable="true" enabled="true" bounds="[0,0][100,100]"/>'
+           '</node></hierarchy>')
+    labels = [a["label"] for a in parse_hierarchy(xml, "a.b", "M")["actions"] if "bounds" in a]
+    assert labels == ["Unlabelled element (945x788 px)", "Unlabelled image (100x100 px)"]

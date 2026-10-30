@@ -213,6 +213,11 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
                         label = f"{label} · {tail}"
             if not label:
                 label = tail
+            unlabelled = not label
+            if unlabelled:
+                # nothing names it (common for Compose images/cards); say what and how big it is
+                kind = "image" if "Image" in n.cls else "element"
+                label = f"Unlabelled {kind} ({r - l}x{b - t} px)"
             role = _ROLES.get(n.cls.rsplit(".", 1)[-1], "button")
             act = {
                 "id": f"n{real}",
@@ -227,6 +232,8 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
             }
             if n.hint:
                 act["hint"] = n.hint
+            if unlabelled:
+                act["unlabelled"] = True
             real += 1
             if n.flag("checkable"):
                 act["checked"] = "true" if n.flag("checked") else "false"
@@ -269,7 +276,7 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
     for a in actions:
         if "bounds" in a and not a.get("synthetic"):
             h.update(repr((a["label"], a["role"], a["bounds"])).encode())
-    readable = bool(text) or any(a["label"] for a in actions if "bounds" in a)
+    readable = bool(text) or any(a["label"] for a in actions if "bounds" in a and not a.get("unlabelled"))
     return {
         "url": url,
         "title": package,
