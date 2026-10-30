@@ -222,7 +222,7 @@ def test_money_pending_requires_same_label(cfg):
 
 
 def test_failed_confirmed_money_act_is_uncertain_and_not_retryable(cfg):
-    t = FakeTarget([page(click("n9", "Transferir"))])
+    t = FakeTarget([page(click("n9", "Transferir"), text="Monto 150000")])
     r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9"]))
     r.run()
     t.raise_on_act = RuntimeError("tap verification failed")
@@ -360,7 +360,7 @@ def test_confirm_transfer_label_without_params_pauses(cfg):
 
 def test_cancelled_during_confirmed_money_act_is_terminal(cfg):
     import asyncio
-    t = RaiseOnce([page(click("n9", "Transferir")), page()], None)
+    t = RaiseOnce([page(click("n9", "Transferir"), text="Monto 150000"), page()], None)
     r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9", "DONE", "DONE"]))
     r.run()
     t.exc = asyncio.CancelledError()

@@ -21,6 +21,7 @@ from .flows import (
     value_source,
 )
 from .guards import (
+    _amount_seen,
     check_money,
     is_money_action,
     is_secret_field,
@@ -118,6 +119,7 @@ class Runner:
         self.receipt: dict | None = None
         self._started = time.perf_counter()
         self._stale = 0
+        self._obs_log: list[tuple[str, str]] = []  # recent (where, text): a field can scroll off
 
     def run(self) -> dict:
         if self._money_uncertain:
@@ -231,6 +233,13 @@ class Runner:
             self.pending = None
             return
         try:
+            if not _amount_seen(self._money_text(page)):
+                # A strong-label tap on a screen with no amount only navigates (e.g. a bank's
+                # account-page "Transferir" that opens the form): not a money action, so it must
+                # not spend the one-money-action budget or save a receipt.
+                self._execute(action, page, None, verify=True)
+                self.pending = None
+                return
             if not (same_screen and self._text_hash(page) == pending["text_hash"]):
                 # Screen changed since the human looked at it: their confirm no longer applies.
                 self._guard_money(action, page, self._money_params())
@@ -294,7 +303,19 @@ class Runner:
             self.page = page
             raise _Stop("blocked", "screen_unreadable")
         self.page = page
+        self._obs_log.append((page.get("url", ""), page.get("text") or ""))
+        del self._obs_log[:-4]
         return page
+
+    def _money_text(self, page: dict) -> str:
+        """Scrubbed text of the current screen plus any just-seen text of the same screen: a
+        confirmation field (e.g. the recipient IBAN) can scroll out of view when the keyboard opens."""
+        where = page.get("url", "")
+        parts = [page.get("text") or ""]
+        for w, t in self._obs_log:
+            if w == where and t not in parts:
+                parts.append(t)
+        return scrub_text("\n".join(parts), self.secrets)
 
     def _decide(self, view: dict) -> dict:
         self.model_calls += 1
@@ -360,13 +381,13 @@ class Runner:
 
     def _guard_money(self, action: dict, page: dict, money_params: dict):
         """Tap autonomously only on an exact on-screen match; otherwise pause."""
-        text = scrub_text(page.get("text") or "", self.secrets)
+        text = self._money_text(page)
         check = check_money(text, money_params, self.cfg.own_accounts)
         if money_params and check.ok and not self.money_attempted:
             self._execute(action, page, None, verify=True, money=True)
             return
         page, action = self._settled(page, action)  # the human must confirm a screen that holds still
-        text = scrub_text(page.get("text") or "", self.secrets)
+        text = self._money_text(page)
         check = check_money(text, money_params, self.cfg.own_accounts)
         self.pending = self._pending_for(
             "money", action, page, text_hash=self._text_hash(page),

@@ -98,6 +98,24 @@ def _default_connect(serial):
     return uiautomator2.connect(serial)
 
 
+# Foreground packages we must not launch an app over: doing so aborts an in-progress share.
+_NO_RELAUNCH_OVER = {"com.android.intentresolver", "com.android.sharesheet"}
+
+
+def _focus_ok(d, action: dict, cx: int, cy: int) -> bool:
+    """The tap landed on the intended field: trust resource_id when present, else the bounds
+    (which may have moved if the keyboard scrolled the field, hence the caller's one retry)."""
+    sel = d(focused=True)
+    if not sel.exists:
+        return False
+    info = sel.info
+    rid = action.get("resource_id")
+    if rid and info.get("resourceName") == rid:
+        return True
+    fb = info["bounds"]
+    return fb["left"] <= cx <= fb["right"] and fb["top"] <= cy <= fb["bottom"]
+
+
 class AndroidTarget:
     kind = "android"
 
@@ -111,7 +129,10 @@ class AndroidTarget:
         self._dev()
         if app:
             pkg = app if "." in app else self._call(lambda d: resolve_app(d, app, self._labels))
-            if (self._call(lambda d: d.app_current()) or {}).get("package") != pkg:
+            cur = (self._call(lambda d: d.app_current()) or {}).get("package")
+            # Never yank an app to the front over a system share sheet: it aborts the share
+            # (launching over a share chooser aborts the share).
+            if cur != pkg and cur not in _NO_RELAUNCH_OVER:
                 self._call(lambda d: d.app_start(pkg))
                 self._settle()
 
@@ -158,7 +179,19 @@ class AndroidTarget:
                 p = parse_hierarchy(xml, info["package"], info["activity"], include_system_ui=True)
             return p
 
-        return self._call(read)
+        p = self._call(read)
+        if self._keyboard_shown():
+            # The IME can cover the button a step needs; give Jev an explicit way to dismiss it.
+            p["actions"].append({"id": "hide_keyboard", "kind": "hide_keyboard",
+                                 "label": "Hide the on-screen keyboard"})
+        return p
+
+    def _keyboard_shown(self) -> bool:
+        try:
+            out = self._call(lambda d: d.shell("dumpsys input_method").output)
+        except Exception:
+            return False
+        return "mInputShown=true" in (out or "")
 
     def fresh(self, page: dict) -> bool:
         return self.observe()["fingerprint"] == page["fingerprint"]
@@ -183,12 +216,10 @@ class AndroidTarget:
                 d.click(cx, cy)
                 if kind == "fill":
                     sleep(0.1)
-                    sel = d(focused=True)
-                    if not sel.exists:
-                        raise StalePage()
-                    fb = sel.info["bounds"]
-                    if not (fb["left"] <= cx <= fb["right"] and fb["top"] <= cy <= fb["bottom"]):
-                        raise StalePage()  # focus landed elsewhere; nothing typed yet
+                    if not _focus_ok(d, action, cx, cy):
+                        sleep(0.3)  # opening the keyboard can scroll the field; look once more
+                        if not _focus_ok(d, action, cx, cy):
+                            raise StalePage()  # focus landed elsewhere; nothing typed yet
                     d.send_keys(text or "", clear=True)
                     # uiautomator2 types by pasting from the clipboard: never leave the value
                     # (often a password or code) there for other apps or keyboard history
@@ -206,6 +237,8 @@ class AndroidTarget:
             self._input(lambda d: d.press("recent"))
         elif kind == "notifications":
             self._input(lambda d: d.open_notification())
+        elif kind == "hide_keyboard":
+            self._input(lambda d: d.press("back"))  # back dismisses the IME without navigating
         elif kind == "scroll":
             direction = "up" if action.get("delta", 1) > 0 else "down"
             self._input(lambda d: d.swipe_ext(direction, scale=0.6))
