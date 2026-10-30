@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; 301 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 302 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -158,6 +158,13 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   (f) uiautomator2 types via the clipboard — now cleared after every fill (keyboard clipboard history may still
   keep values: tell Eduardo to clear/disable it on the tablet); (g) a run_task with url_or_app while another app
   is in front relaunches that app (likely Grok's 'BAC minimized').
+
+- 2026-10-30 Chrome (personal profile) tests: navigation/search/typing work; web money-guard labels added
+  (Place order, Buy now, Pay now, Finalizar compra, ... commit 381f263) and unit-tested. A live 'click a real
+  Pay now' guard test was (correctly) blocked by the transaction safety classifier; not retried. Found a real
+  Chrome weakness: on saucedemo.com login, Jev looped re-filling Username and never advanced to the Password
+  field, then returned BLOCKED on a directed retry. Multi-field web form login needs work in the Chrome target /
+  page model before autonomous web checkout is trustworthy. Guard itself is enforced by the shared code path.
 
 ## Known residuals after final review (2026-10-29)
 
