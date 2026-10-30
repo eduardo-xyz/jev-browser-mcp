@@ -19,3 +19,8 @@ def _verify_ok(monkeypatch):
     # no network in tests: the independent DONE/BLOCKED check is unavailable unless a test overrides it
     monkeypatch.delenv("TEXT_MODEL_API_KEY", raising=False)
     monkeypatch.setattr("jev_runner.verify.check", lambda goal, page, history: (None, ""))
+
+
+@pytest.fixture(autouse=True)
+def _no_settle_delay(monkeypatch):
+    monkeypatch.setattr("jev_runner.runner.Runner.settle_delay", 0)

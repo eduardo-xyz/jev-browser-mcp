@@ -522,3 +522,16 @@ def test_result_build_keeps_session_id_and_flow_names_intact(cfg):
     assert out["session_id"] == "a1234b"
     assert out["flow_used"] == out["flow_saved"] == out["flow_updated"] == "pay-1234"
     assert out["reason"] == "boom •••"
+
+
+def test_money_pause_records_the_settled_screen(cfg):
+    # the confirm screen is still animating when Jev picks Pagar: the pause must describe the
+    # screen that holds still, so a later confirm compares against what the human saw
+    moving = page(click("n0", "Pagar"), text="Monto 5 cargando")
+    still = page(click("n0", "Pagar"), text="Monto 5 Destino ****1111")
+    t = FakeTarget([moving, still, still], advance_on_observe=2)
+    r = Runner("s", t, "pay", {"amount": 5}, cfg, money_params=["amount", "recipient"],
+               choose=scripted_choose(["n0"]), learn=False)
+    out = r.run()
+    assert out["status"] == "paused_mismatch"
+    assert r.pending["fingerprint"] == still["fingerprint"]

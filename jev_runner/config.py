@@ -40,13 +40,16 @@ class Config:
         "cancelar", "cancel",
     ])
     own_accounts: list[str] = field(default_factory=list)
+    # Exact button labels you have checked only open a menu or form and never move money
+    # (e.g. a bank's "Transferir o pagar" tab). Whole-label match; never a money action.
+    navigation_labels: list[str] = field(default_factory=list)
     session_ttl_s: int = 900
     reconnect_window_s: int = 30
     data_dir: Path = field(default_factory=data_dir)
 
 
 LIST_FIELDS = ("money_apps", "money_labels", "money_labels_contextual",
-               "money_exclude_words", "secret_patterns", "own_accounts")
+               "money_exclude_words", "secret_patterns", "own_accounts", "navigation_labels")
 
 
 def load() -> Config:

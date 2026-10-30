@@ -181,6 +181,7 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
     synthetic = []  # WebView text links emitted so far (own id namespace: w0, w1, ...)
     real = 0  # element actions emitted so far (ids n0, n1, ...)
     scroll = False
+    captions = set()  # bounds of captions now naming an icon: their text is not a second button
     for i, n in enumerate(nodes):
         if not n.included:
             continue
@@ -216,11 +217,13 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
                 label = tail
             if not label:
                 # icon button with its caption drawn just below it (tile menus)
-                caps = [(o.bounds[1] - b, o.text or o.desc) for o in inc
+                caps = [(o.bounds[1] - b, o.text or o.desc, o.bounds) for o in inc
                         if o is not n and (o.text or o.desc) and 0 <= o.bounds[1] - b <= _CAPTION_PX
                         and o.bounds[0] < r and o.bounds[2] > l]
                 if caps:
-                    label = min(caps, key=lambda c: c[0])[1]
+                    cap = min(caps, key=lambda c: c[0])
+                    label = cap[1]
+                    captions.add(tuple(cap[2]))
             unlabelled = not label
             if unlabelled:
                 # nothing names it (common for Compose images/cards); say what and how big it is
@@ -270,6 +273,7 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
         if own and not (actionable and is_edit):
             text_nodes.append((b, own, i, l, r))
 
+    actions = [a for a in actions if not (a.get("synthetic") and tuple(a["bounds"]) in captions)]
     actions.append({"id": "back", "kind": "back", "label": "Go back"})
     actions.append({"id": "wait", "kind": "wait", "label": "Wait for the screen to update"})
     actions.append({"id": "home", "kind": "home", "label": "Go to the home screen"})

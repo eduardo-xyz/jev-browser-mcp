@@ -76,6 +76,8 @@ class _Stop(Exception):
 
 
 class Runner:
+    settle_delay = 0.4  # seconds between reads when checking a paused screen holds still
+
     def __init__(self, session_id: str, target: Target, goal: str, params: dict | None,
                  cfg: Config, *, max_steps: int = 40, money_params: list[str] | None = None,
                  flow: Flow | None = None, save_as: str | None = None,
@@ -361,11 +363,30 @@ class Runner:
         if money_params and check.ok and not self.money_attempted:
             self._execute(action, page, None, verify=True, money=True)
             return
+        page, action = self._settled(page, action)  # the human must confirm a screen that holds still
+        text = scrub_text(page.get("text") or "", self.secrets)
+        check = check_money(text, money_params, self.cfg.own_accounts)
         self.pending = self._pending_for(
             "money", action, page, text_hash=self._text_hash(page),
             expected=scrub_value(check.expected, self.secrets),
             seen=scrub_value(check.seen, self.secrets))
         raise _Stop("paused_mismatch", "money_already_attempted" if self.money_attempted else None)
+
+    def _settled(self, page: dict, action: dict, tries: int = 4) -> tuple[dict, dict]:
+        """Re-read until two reads agree, so a pause never records a screen still animating."""
+        for _ in range(tries):
+            time.sleep(self.settle_delay)
+            again = self.target.observe()
+            if (again.get("fingerprint") == page.get("fingerprint")
+                    and self._text_hash(again) == self._text_hash(page)):
+                break
+            found = [a for a in find_by_locator(again, locator_of(action))
+                     if a.get("label") == action.get("label")]
+            if len(found) != 1:
+                break  # the button moved or multiplied: keep the screen the decision was made on
+            page, action = again, found[0]
+        self.page = page
+        return page, action
 
     def _save_receipt(self, page: dict):
         text = scrub(page, self.secrets).get("text") or ""

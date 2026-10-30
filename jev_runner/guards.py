@@ -50,6 +50,8 @@ def is_money_action(action: dict, page: dict, money_params: dict, cfg: Config) -
     if action.get("kind") != "click":
         return False
     label = normalize(action.get("label") or "")
+    if label in {normalize(x) for x in cfg.navigation_labels}:
+        return False
     if set(label.split()) & {normalize(w) for w in cfg.money_exclude_words}:
         return False
     if _label_matches(label, cfg.money_labels):

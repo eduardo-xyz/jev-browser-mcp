@@ -250,3 +250,12 @@ def test_unlabelled_icon_takes_caption_below():
            '</node></hierarchy>')
     acts = [a for a in parse_hierarchy(xml, "a.b", "M")["actions"] if a.get("node") == 0]
     assert acts[0]["label"] == "Transferir dinero"
+
+
+def test_caption_naming_an_icon_is_not_a_second_button():
+    xml = ('<hierarchy><node package="a.b" class="android.webkit.WebView" enabled="true" bounds="[0,0][1600,2560]">'
+           '<node package="a.b" class="android.view.View" clickable="true" enabled="true" bounds="[231,414][346,529]"/>'
+           '<node package="a.b" class="android.widget.TextView" text="Transferir dinero" enabled="true" bounds="[146,585][432,634]"/>'
+           '</node></hierarchy>')
+    labelled = [a for a in parse_hierarchy(xml, "a.b", "M")["actions"] if a.get("label") == "Transferir dinero"]
+    assert len(labelled) == 1 and labelled[0]["id"] == "n0"

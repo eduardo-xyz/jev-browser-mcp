@@ -178,3 +178,11 @@ def test_malformed_amounts_fail_closed():
     assert parse_amount("1.234.567") == parse_amount("1,234,567") == Decimal("1234567")
     assert parse_amount("1,234.56") == parse_amount("1.234,56") == Decimal("1234.56")
     assert parse_amount("₡ 150 000,00") == Decimal("150000.00")
+
+
+def test_navigation_labels_are_never_money_actions():
+    cfg = Config(navigation_labels=["Transferir o pagar", "Transferir dinero"])
+    click = lambda label: {"kind": "click", "label": label}
+    assert not is_money_action(click("Transferir o pagar"), {"url": "x"}, {"amount": 5}, cfg)
+    assert not is_money_action(click("transferir DINERO"), {"url": "x"}, {}, cfg)
+    assert is_money_action(click("Transferir"), {"url": "x"}, {}, cfg)  # whole label only
