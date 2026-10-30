@@ -6,6 +6,7 @@ import time
 from jev_ultrafast import model
 
 from . import result
+from . import verify as verify_mod
 from .config import Config
 from .flows import (
     Flow,
@@ -79,7 +80,7 @@ class Runner:
                  cfg: Config, *, max_steps: int = 40, money_params: list[str] | None = None,
                  flow: Flow | None = None, save_as: str | None = None,
                  store: FlowStore | None = None, start: str | None = None,
-                 learn: bool = True, choose=model.choose, field_text=model.field_text):
+                 learn: bool = True, choose=model.choose, field_text=model.field_text, verify=None):
         self.session_id, self.target, self.params, self.cfg = session_id, target, params, cfg
         self.goal = goal_text(goal, params)
         self._goal_raw = goal  # saved flows keep the goal without this run's values
@@ -96,6 +97,9 @@ class Runner:
         self.flow_updated: str | None = None
         self._jev_steps = 0  # actions decided by Jev (not replayed)
         self._choose, self._field_text = choose, field_text
+        self._verify = verify  # None: verify.check, looked up per call
+        self.verified: bool | None = None  # independent check of the last DONE/BLOCKED
+        self._verify_reason = ""
         self.status, self.reason = "running", None
         self.history: list[dict] = []
         self.page: dict = {}
@@ -170,8 +174,8 @@ class Runner:
         start = self.start or (self.history[0]["where"] if self.history else None)
         if self.save_as:
             name, start, goal, healing = self.save_as, start, self._goal_raw, False
-        elif not self.learn or not self._jev_steps:
-            return
+        elif not self.learn or not self._jev_steps or self.verified is not True:
+            return  # learn only from runs whose result was independently confirmed
         elif self.flow is None:
             name, goal, healing = auto_name(self.target.kind, start, self._goal_raw), self._goal_raw, False
         else:
@@ -382,14 +386,26 @@ class Runner:
         if choice == "DONE":
             if self.executed_money and self.receipt is None:
                 self._save_receipt(page)
+            if self._check(page) is False:
+                raise _Stop("unverified", self._verify_reason or "goal_not_visible")
             raise _Stop("done")
         if choice == "BLOCKED":
+            if self._check(page) is True:  # Jev gave up, but the goal is visibly met
+                raise _Stop("done", "verified_after_blocked")
             raise _Stop("blocked", "jev_blocked")
         action = next((a for a in page["actions"] if a["id"] == choice), None)
         if action is None:
             raise _Stop("error", "unknown_action")
         self._jev_steps += 1
         self._dispatch(action, page, lambda: self._model_text(action, page))
+
+    def _check(self, page: dict) -> bool | None:
+        """Second opinion on Jev's verdict from the text model; None when unavailable."""
+        check = self._verify or verify_mod.check
+        ok, why = check(self.goal, scrub(page, self.secrets), self.history)  # text model: not in model_calls
+        self.verified = ok
+        self._verify_reason = scrub({"text": why}, self.secrets)["text"][:200] if why else ""
+        return ok
 
     def _dispatch(self, action: dict, page: dict, text_for):
         """Shared by Jev-chosen and replayed actions: secret and money guards first."""

@@ -97,7 +97,11 @@ own_accounts = []   # your own account numbers; transfers to these are recognise
 
 ## Flows (learning)
 
-By default (`learn=True`) a successful run is auto-saved as a flow, replayed on matching
+Every DONE and BLOCKED verdict from Jev gets a second opinion from the text model on the final
+screen. A rejected DONE returns status `unverified`; a BLOCKED run whose goal is visibly met returns
+`done` (reason `verified_after_blocked`). Only runs confirmed this way are learned.
+
+By default (`learn=True`) a successful, independently confirmed run is auto-saved as a flow, replayed on matching
 later goals, and self-healed (updated) when the UI drifts. Results may include `flow_used`,
 `flow_saved` and `flow_updated`. Pass `learn=False` to disable this; use `flow=` / `save_as=`
 to select or name one explicitly. Secrets (OTP, passwords, PINs) are never stored, but flow

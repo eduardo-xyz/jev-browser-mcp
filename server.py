@@ -44,6 +44,10 @@ def run_task(
       `resume(session_id, input=...)`.
     - `paused_mismatch`: show the user `expected` and `seen`; call
       `resume(session_id, confirm=True)` ONLY after the user explicitly approves.
+    - `unverified`: Jev said done, but an independent check of the final screen disagreed
+      (`reason` says why). Treat the goal as NOT done; check the screen (`screenshot`) before
+      retrying. A `done` with reason `verified_after_blocked` means Jev gave up but the goal is
+      visibly met.
     - `error` with reason `money_action_uncertain`: tell the user to check the app
       manually, then call `end_session` (the session is terminal).
     Results may include `flow_used` / `flow_saved` / `flow_updated` (learned flows replay

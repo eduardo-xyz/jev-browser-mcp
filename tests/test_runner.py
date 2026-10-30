@@ -121,3 +121,47 @@ def test_stale_post_act_observe_does_not_retry_act(cfg):
     t.observe = observe
     out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1", "DONE"])).run()
     assert out["status"] == "done" and len(t.acted) == 1
+
+
+def test_done_rejected_by_check_is_unverified_and_not_learned(cfg, tmp_path):
+    from jev_runner.flows import FlowStore
+    store = FlowStore(tmp_path)
+    t = FakeTarget([page(click("n0", "Go")), page()])
+    out = Runner("s", t, "g", None, cfg, store=store, choose=scripted_choose(["n0", "DONE"]),
+                 verify=lambda g, p, h: (False, "message typed but not sent")).run()
+    assert out["status"] == "unverified" and out["reason"] == "message typed but not sent"
+    assert "flow_saved" not in out and not list(tmp_path.glob("*.json"))
+
+
+def test_blocked_but_goal_visibly_met_is_done(cfg):
+    t = FakeTarget([page(click("n0", "Send")), page()])
+    out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n0", "BLOCKED"]),
+                 verify=lambda g, p, h: (True, "")).run()
+    assert out["status"] == "done" and out["reason"] == "verified_after_blocked"
+
+
+def test_unavailable_check_keeps_jev_verdict_but_never_learns(cfg, tmp_path):
+    from jev_runner.flows import FlowStore
+    t = FakeTarget([page(click("n0", "Go")), page()])
+    out = Runner("s", t, "g", None, cfg, store=FlowStore(tmp_path),
+                 choose=scripted_choose(["n0", "DONE"]), verify=lambda g, p, h: (None, "")).run()
+    assert out["status"] == "done" and "flow_saved" not in out
+
+
+def test_check_sees_scrubbed_screen(cfg):
+    seen = []
+    t = FakeTarget([page(text="code 482913")])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["DONE"]),
+               verify=lambda g, p, h: seen.append(p) or (True, ""))
+    r.secrets.append("482913")
+    r.run()
+    assert seen and "482913" not in json.dumps(seen)
+
+
+def test_verify_check_without_key_is_unavailable(monkeypatch):
+    import importlib
+    from jev_runner import verify
+    monkeypatch.undo()  # drop the conftest stub
+    importlib.reload(verify)
+    monkeypatch.delenv("TEXT_MODEL_API_KEY", raising=False)
+    assert verify.check("g", {"text": ""}, []) == (None, "")

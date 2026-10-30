@@ -1,8 +1,16 @@
+import pytest
 import json
 
 from jev_runner.flows import FlowStore, auto_name, goal_key
 from jev_runner.runner import Runner
 from tests.fakes import FakeTarget, click, fill, page, scripted_choose
+
+
+@pytest.fixture(autouse=True)
+def _verified(monkeypatch):
+    # learning needs an independently confirmed DONE
+    monkeypatch.setattr("jev_runner.verify.check", lambda goal, page, history: (True, ""))
+
 
 RECIPIENT = "CR05015202001026284066"
 START = "com.example.water"
@@ -76,7 +84,8 @@ def test_fallback_then_success_heals_flow(tmp_path, cfg):
     assert out3["model_calls"] == 1 and "flow_updated" not in out3
 
 
-def test_failed_or_paused_runs_never_save(tmp_path, cfg):
+def test_failed_or_paused_runs_never_save(tmp_path, cfg, monkeypatch):
+    monkeypatch.setattr("jev_runner.verify.check", lambda goal, page, history: (False, ""))
     store = FlowStore(tmp_path)
     out = Runner("a", FakeTarget(pay_pages(5)), "x", None, cfg, store=store,
                  choose=scripted_choose(["n1", "BLOCKED"]), field_text=text_amt).run()
