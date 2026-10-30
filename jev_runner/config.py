@@ -22,10 +22,12 @@ class Config:
     # the LAN (system or Homebrew python; uv-managed CPython is blocked).
     relay_python: str = "/usr/bin/python3"
     money_apps: list[str] = field(default_factory=list)  # opt-in via config.toml; nothing app-specific
-    # Strong labels: guarded on any app/site, always.
+    # Strong labels: guarded on any app/site, always. Bank transfers and web checkout alike.
     money_labels: list[str] = field(default_factory=lambda: [
         "Transferir", "Pagar", "Pagar ahora", "Confirmar pago", "Confirmar transferencia",
         "Pay", "Pay now", "Transfer", "Send money", "Confirm transfer", "Confirm payment",
+        "Place order", "Place your order", "Buy now", "Buy it now", "Complete purchase",
+        "Complete order", "Comprar ahora", "Finalizar compra", "Realizar pedido", "Realizar el pedido",
     ])
     # Contextual labels: guarded only with money params or on a configured money app.
     money_labels_contextual: list[str] = field(default_factory=lambda: [

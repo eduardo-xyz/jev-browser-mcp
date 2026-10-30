@@ -186,3 +186,15 @@ def test_navigation_labels_are_never_money_actions():
     assert not is_money_action(click("Transferir o pagar"), {"url": "x"}, {"amount": 5}, cfg)
     assert not is_money_action(click("transferir DINERO"), {"url": "x"}, {}, cfg)
     assert is_money_action(click("Transferir"), {"url": "x"}, {}, cfg)  # whole label only
+
+
+def test_web_checkout_labels_are_guarded_everywhere():
+    cfg = Config()
+    anywhere = {"url": "shop.example.com/cart", "text": ""}
+    click = lambda label: {"kind": "click", "label": label}
+    for label in ["Place order", "Place your order", "Buy now", "Buy it now",
+                  "Complete purchase", "Finalizar compra", "Comprar ahora", "Realizar pedido"]:
+        assert is_money_action(click(label), anywhere, {}, cfg), label
+    # plain navigation stays unguarded
+    for label in ["Proceed to checkout", "Checkout", "Add to cart", "Continue shopping"]:
+        assert not is_money_action(click(label), anywhere, {}, cfg), label
