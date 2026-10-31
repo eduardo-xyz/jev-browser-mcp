@@ -283,6 +283,20 @@ def test_run_through_daemon_records_metrics(daemon_with_fakes, keys, script):
     assert daemon_with_fakes.memory._conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
 
 
+def test_add_lesson_op_stores_and_is_retrievable(daemon_with_fakes):
+    d = daemon_with_fakes
+    r = d.handle({"op": "add_lesson", "args": {"target": "android", "app": "com.whatsapp",
+                                               "goal": "forward invoice", "body": "long-press then Forward"}})
+    assert r["ok"] and r["result"]["lesson_id"] >= 1
+    hits = d.memory.query_lessons(target="android", app="com.whatsapp", goal="forward")
+    assert any("Forward" in h["body"] for h in hits) and hits[0]["source"] == "agent"
+
+
+def test_add_lesson_requires_body(daemon_with_fakes):
+    r = daemon_with_fakes.handle({"op": "add_lesson", "args": {"body": "  "}})
+    assert r["ok"] is False and "body" in r["error"]
+
+
 def test_flows_listed_used_and_deleted(daemon_with_fakes, keys, cfg):
     store = FlowStore(cfg.data_dir / "flows")
     store.save(Flow(name="otp-flow", target="android", start=None, goal="otp"))

@@ -82,6 +82,7 @@ class Daemon:
         try:  # a memory failure must never take the daemon down; runs just aren't recorded
             from .memory import MemoryStore
             self.memory = MemoryStore(cfg.data_dir / "memory.db")
+            self.memory.import_lessons_md(cfg.data_dir / "lessons.md")  # one-time; no-op after
         except Exception:
             self.memory = None
             log.exception("experience memory unavailable")
@@ -240,7 +241,8 @@ class Daemon:
                 session.runner = self.runner_factory(
                     session.session_id, session.target, goal, params, self.cfg,
                     max_steps=max_steps, money_params=money_params, flow=chosen,
-                    save_as=save_as, store=self.store, start=start, learn=learn)
+                    save_as=save_as, store=self.store, start=start, learn=learn,
+                    memory=self.memory)
             except BaseException:
                 if new:  # don't leave a runner-less session holding a device
                     self._close_session(session)
@@ -365,6 +367,16 @@ class Daemon:
             finally:
                 session.last_used = time.time()
             return {"session_id": session_id, **out}
+
+    def op_add_lesson(self, target: str | None = None, app: str | None = None, goal: str = "",
+                      body: str = "", screen_tags: str = "") -> dict:
+        if self.memory is None:
+            raise OpError("memory_unavailable")
+        if not body.strip():
+            raise OpError("bad_args: body is required")
+        lid = self.memory.add_lesson(target=target, app=app, goal=goal, body=body,
+                                     screen_tags=screen_tags, source="agent")
+        return {"lesson_id": lid}
 
     def op_end_session(self, session_id: str) -> dict:
         session = self._get(session_id)

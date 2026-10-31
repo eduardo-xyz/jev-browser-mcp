@@ -97,5 +97,24 @@ class MemoryStore:
             [*params, k]).fetchall()
         return [dict(r) for r in rows]
 
+    def import_lessons_md(self, path, target=None) -> int:
+        """One-time import of a freeform lessons.md into retrievable lessons (one per H2 section).
+        After import the DB is the source of truth, so a second call is a no-op."""
+        path = Path(path)
+        if not path.exists():
+            return 0
+        if self._conn.execute(
+                "SELECT COUNT(*) FROM lessons WHERE source = 'lessons.md'").fetchone()[0]:
+            return 0  # already imported
+        count = 0
+        # [1:] drops the preamble before the first H2 (not a lesson); each remaining chunk is a section
+        for part in re.split(r"(?m)^##\s+", path.read_text(errors="replace"))[1:]:
+            body = part.strip()
+            if len(body) < 20:  # skip tiny fragments
+                continue
+            self.add_lesson(target=target, goal=body.splitlines()[0], body=body, source="lessons.md")
+            count += 1
+        return count
+
     def close(self) -> None:
         self._conn.close()

@@ -100,6 +100,17 @@ def end_session(session_id: str) -> dict:
 
 
 @mcp.tool()
+def add_lesson(body: str, target: str | None = None, app: str | None = None,
+               goal: str = "", screen_tags: str = "") -> dict:
+    """Save a durable lesson to the experience memory (replaces hand-editing lessons.md). `body` is
+    the knowledge ("avoid the Quiero sheet", "hide keyboard before Continuar"); `target`/`app`/`goal`
+    scope it so future runs on the same app/goal retrieve it. Account/PII digit runs are stripped
+    before storing. Use this for durable playbook knowledge, not one-off notes."""
+    return _call("add_lesson", {"body": body, "target": target, "app": app,
+                                "goal": goal, "screen_tags": screen_tags})
+
+
+@mcp.tool()
 def status() -> dict:
     """Show daemon status: `sessions` (each with session_id, target, status and idle_s),
     `android` (`serial` last reached and whether it is `connected`) and `flows` (count of

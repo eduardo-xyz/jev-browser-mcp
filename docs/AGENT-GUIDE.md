@@ -50,7 +50,11 @@ fine now — the socket is relocated to a short path when needed).
 | `screenshot(session_id)` | Saves a PNG of the screen, returns its path. Use it to check before approving anything. |
 | `read(session_id)` | Read-only. Returns the page's visible `text` and per-iframe `frames`, **including cross-origin iframes** the normal snapshot can't see (e.g. a white-labelled GHL automation screen). Use it to list/read content when a `run_task` only "waits" because the real UI is in an iframe. It **self-settles** (re-reads until the text stops growing, up to ~12 s), so no manual sleep is needed. Only visible rows of a virtualised table are captured. Never clicks or changes anything. |
 | `end_session(session_id)` | Always call when finished, and after `money_action_uncertain`. |
+| `add_lesson(body, target, app, goal, screen_tags)` | Save durable playbook knowledge to the experience memory (replaces hand-editing `lessons.md`), e.g. "avoid the Quiero sheet". Scope it with `target`/`app`/`goal` so future runs on the same app/goal retrieve it automatically. Account/PII digit runs are stripped. |
 | `status`, `list_flows`, `delete_flow` | Housekeeping. |
+
+Every run also records scrubbed metrics, and each run automatically retrieves the lessons relevant
+to its goal/app and feeds them to Jev as hints — so writing a good lesson once helps future runs.
 
 ## Results and what to do
 

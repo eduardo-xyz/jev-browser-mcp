@@ -92,10 +92,12 @@ class Runner:
                  cfg: Config, *, max_steps: int = 40, money_params: list[str] | None = None,
                  flow: Flow | None = None, save_as: str | None = None,
                  store: FlowStore | None = None, start: str | None = None,
-                 learn: bool = True, choose=model.choose, field_text=model.field_text, verify=None):
+                 learn: bool = True, choose=model.choose, field_text=model.field_text, verify=None,
+                 memory=None):
         self.session_id, self.target, self.params, self.cfg = session_id, target, params, cfg
         self.goal = goal_text(goal, params)
         self._goal_raw = goal  # saved flows keep the goal without this run's values
+        self._add_hints(memory, target, goal, start)  # fold retrieved lessons into the goal context
         self.max_steps, self.money_params, self.flow = max_steps, money_params or [], flow
         if flow is not None:  # the flow's money-critical keys guard every replay
             self.money_params = sorted({*self.money_params, *flow.money_params})
@@ -266,6 +268,21 @@ class Runner:
     def _pending_for(self, kind: str, action: dict, page: dict, **extra) -> dict:
         return {"type": kind, "locator": locator_of(action), "action_id": action["id"],
                 "label": action.get("label"), "fingerprint": page.get("fingerprint"), **extra}
+
+    def _add_hints(self, memory, target, goal, start) -> None:
+        """Query the experience memory for lessons relevant to this goal/app and append them to the
+        goal as advisory hints. Advisory only — the model may ignore them and the guards are
+        unchanged. Lessons are already PII-scrubbed in the store, so nothing sensitive is added."""
+        if memory is None:
+            return
+        try:
+            hints = memory.query_lessons(target=getattr(target, "kind", None), app=start,
+                                         goal=goal, k=3)
+        except Exception:
+            return  # retrieval must never break a run
+        if hints:
+            self.goal += ("\n\nWhat we've learned before (hints — may not all apply):\n"
+                          + "\n".join(f"- {h['body']}" for h in hints if h.get("body")))
 
     def _touch(self):
         self.last_used = time.time()

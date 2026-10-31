@@ -55,6 +55,18 @@ def test_record_run_and_roundtrip(tmp_path):
     assert "148000" not in row["goal"] and "88244852" not in row["goal"]  # scrubbed
 
 
+def test_import_lessons_md_is_one_time(tmp_path):
+    md = tmp_path / "lessons.md"
+    md.write_text("# Lessons\n\nsome preamble\n\n"
+                  "## 2026-10-31 BAC SINPE\nUse A SINPE Movil, avoid the Quiero sheet.\n\n"
+                  "## WhatsApp forward\nLong-press the message then Forward.\n")
+    s = store(tmp_path)
+    assert s.import_lessons_md(md) == 2  # two H2 sections, preamble skipped
+    assert s.import_lessons_md(md) == 0  # idempotent: DB is now source of truth
+    hits = s.query_lessons(goal="SINPE Quiero", k=5)
+    assert any("Quiero" in h["body"] for h in hits)
+
+
 def test_match_query_is_fts_safe(tmp_path):
     # punctuation / FTS operators in the goal must not raise
     s = store(tmp_path)

@@ -56,6 +56,27 @@ def _osc_page(fp, cid, label):
             "actions": [{"id": cid, "node": 1, "kind": "click", "label": label, "role": "button"}]}
 
 
+def test_retrieved_lessons_are_injected_into_the_goal(cfg):
+    class FakeMemory:
+        def __init__(self): self.seen = {}
+        def query_lessons(self, **kw):
+            self.seen = kw
+            return [{"body": "avoid the Quiero sheet"}, {"body": "hide keyboard before Continuar"}]
+
+    mem = FakeMemory()
+    r = Runner("s", FakeTarget([page()]), "pay the planilla", {"amount": 5}, cfg,
+               choose=scripted_choose(["DONE"]), start="net.bac.sbe.android", memory=mem)
+    assert "avoid the Quiero sheet" in r.goal and "hide keyboard before Continuar" in r.goal
+    assert r.goal.startswith("pay the planilla")  # original goal + values preserved
+    assert r._goal_raw == "pay the planilla"  # raw goal (for flow naming) is NOT polluted
+    assert mem.seen["app"] == "net.bac.sbe.android" and mem.seen["target"] == "android"
+
+
+def test_no_memory_leaves_goal_unchanged(cfg):
+    r = Runner("s", FakeTarget([page()]), "do a thing", None, cfg, choose=scripted_choose(["DONE"]))
+    assert r.goal == "do a thing"  # no memory -> no hints block
+
+
 def test_oscillation_between_two_screens_is_stopped(cfg):
     # open wrong account -> back -> open again -> ...  Each step changes the screen, so no_progress
     # never fires; the loop detector must stop it well before max_steps.
