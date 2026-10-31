@@ -247,7 +247,7 @@ def test_read_merges_top_and_cross_origin_iframe(monkeypatch):
         return {}
 
     monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
-    out = t.read()
+    out = t._read_once()
     assert out["readable"] is True and out["url"] == "https://app.example/x"
     assert "Round Robin" in out["text"] and "Stop AI when task is made" in out["text"]
     assert "Create workflow" in out["text"] and "Publish" in out["text"]
@@ -274,7 +274,7 @@ def test_read_dedupes_identical_iframes_from_two_tabs(monkeypatch):
         return {}
 
     monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
-    out = t.read()
+    out = t._read_once()
     assert attached == ["IF1", "IF2"]  # both attached (and detached)
     assert len(out["frames"]) == 1 and out["text"].count("Same workflows") == 1
 
@@ -284,7 +284,7 @@ def test_read_without_iframes_returns_top_only(monkeypatch):
     t = ChromeTarget("https://app.example/x", browser_factory=f)
     f.browsers[0].evaluate = _top_eval({"origins": [], "top": {"text": "Just the top", "labels": []}})
     monkeypatch.setattr(chrome_mod, "_cdp", lambda method, **kw: {})
-    out = t.read()
+    out = t._read_once()
     assert out["frames"] == [] and out["text"] == "Just the top" and out["readable"] is True
 
 
@@ -294,7 +294,37 @@ def test_read_truncates_to_limit(monkeypatch):
     big = "x" * (chrome_mod.READ_LIMIT + 5000)
     f.browsers[0].evaluate = _top_eval({"origins": [], "top": {"text": big, "labels": []}})
     monkeypatch.setattr(chrome_mod, "_cdp", lambda method, **kw: {})
-    assert len(t.read()["text"]) == chrome_mod.READ_LIMIT
+    assert len(t._read_once()["text"]) == chrome_mod.READ_LIMIT
+
+
+def test_read_polls_until_text_stops_growing(monkeypatch):
+    # fake_clock makes _sleep instant; read() should keep re-reading while text grows, then stop.
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    seq = iter([
+        {"url": "u", "text": "a" * 10, "frames": [], "readable": True},
+        {"url": "u", "text": "a" * 50, "frames": [], "readable": True},
+        {"url": "u", "text": "a" * 50, "frames": [], "readable": True},  # stable -> return
+    ])
+    calls = []
+    monkeypatch.setattr(t, "_read_once", lambda: calls.append(1) or next(seq))
+    out = t.read()
+    assert len(out["text"]) == 50 and len(calls) == 3
+
+
+def test_read_stops_at_settle_deadline(monkeypatch):
+    # text that never stops growing must still return by the deadline, not loop forever.
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    n = [0]
+
+    def grow():
+        n[0] += 1
+        return {"url": "u", "text": "a" * n[0], "frames": [], "readable": True}
+
+    monkeypatch.setattr(t, "_read_once", grow)
+    out = t.read(settle_s=3, interval_s=1)
+    assert out["text"]  # returned without hanging
 
 
 def test_overlay_button_already_in_actions_is_not_duplicated():

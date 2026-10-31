@@ -248,7 +248,21 @@ class ChromeTarget:
                             "label": f.get("label") or "Password", "role": "textbox",
                             "value": "", "password": True})
 
-    def read(self) -> dict:
+    def read(self, settle_s: float = 12.0, interval_s: float = 1.0) -> dict:
+        """Read, re-reading until the merged text stops growing (async iframe content loads late),
+        so callers don't have to sleep before reading. Bounded by `settle_s`."""
+        best = self._read_once()
+        deadline = _monotonic() + settle_s
+        while _monotonic() < deadline:
+            _sleep(interval_s)
+            nxt = self._read_once()
+            if len(nxt["text"]) > len(best["text"]):
+                best = nxt  # still filling in; keep waiting
+            else:
+                return best if len(best["text"]) >= len(nxt["text"]) else nxt
+        return best
+
+    def _read_once(self) -> dict:
         """Read-only merged text of the top frame and every cross-origin (OOPIF) child frame.
 
         The normal snapshot only sees the top frame, so pages that render their UI inside a
