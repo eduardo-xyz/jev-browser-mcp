@@ -72,15 +72,46 @@ def test_oscillation_between_two_screens_is_stopped(cfg):
     assert len(r.history) < 10  # stopped at the cycle, not churned to max_steps
 
 
+def test_auto_recovers_by_dropping_looped_action(cfg):
+    # screen A offers Wrong + Right; Jev keeps choosing Wrong (A->B->A). Once Wrong has looped it is
+    # dropped from the view, so Jev is forced to pick Right, which finishes the goal.
+    def A():
+        return {"url": "u", "title": "t", "text": "", "readable": True, "fingerprint": "FA",
+                "actions": [{"id": "a1", "node": 1, "kind": "click", "label": "Wrong", "role": "button"},
+                            {"id": "a2", "node": 2, "kind": "click", "label": "Right", "role": "button"}]}
+    B = lambda: _osc_page("FB", "b1", "Back")
+    D = lambda: {"url": "u", "title": "t", "text": "done", "readable": True, "fingerprint": "FD", "actions": []}
+    pages = [A(), B(), A(), B(), A(), D()]
+
+    def choose(page, goal, history):
+        if page["fingerprint"] == "FD":
+            c = "DONE"
+        else:
+            ids = {a["id"] for a in page["actions"]}
+            c = next(p for p in ("a1", "a2", "b1", "wait") if p in ids or p == "wait")
+        return {"choice": c, "operation": c, "target": None, "confidence": 1.0,
+                "probabilities": {c: 1.0}, "latency_ms": 1, "usage": {}}
+
+    r = Runner("s", FakeTarget(pages), "g", None, cfg, max_steps=40, choose=choose)
+    out = r.run()
+    assert out["status"] == "done"
+    assert any(h["action"] == "Right" for h in r.history)  # recovered onto the other action
+
+
 def test_looping_counts_same_action_on_same_fingerprint(cfg):
     r = Runner("s", FakeTarget([page()]), "g", None, cfg, choose=scripted_choose([]))
     act = {"id": "e1", "node": 1, "kind": "click", "label": "X", "role": "button"}
     pg = {"fingerprint": "F1", "actions": [act]}
     assert not r._looping(pg, act)  # no history yet
-    r.history = [{"fingerprint": "F1", "locator": runner_mod.locator_of(act)} for _ in range(3)]
+    r.history = [{"fingerprint": "F1", "locator": runner_mod.locator_of(act), "page_changed": True}
+                 for _ in range(3)]
     assert r._looping(pg, act)  # three prior identical taps on the same screen
     assert not r._looping({"fingerprint": "OTHER", "actions": [act]}, act)  # different screen
     assert not r._looping(pg, {**act, "kind": "scroll"})  # scroll is paced elsewhere
+    # a frozen screen (page_changed False) is no_progress's job, not the loop detector's
+    r.history = [{"fingerprint": "F1", "locator": runner_mod.locator_of(act), "page_changed": False}
+                 for _ in range(3)]
+    assert not r._looping(pg, act)
 
 
 def test_no_progress_blocks(cfg):

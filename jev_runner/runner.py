@@ -36,9 +36,11 @@ from .targets.base import DeviceDisconnected, StalePage, Target, TargetBlocked
 UNREADABLE_TRIES = 3
 NO_PROGRESS = 3
 MAX_WAITS = 3  # a churny SPA never looks "settled"; after this many waits, force a real decision
-LOOP_LIMIT = 3  # same action on the same screen this many times = a cycle (e.g. open wrong account
-#                 -> back -> open again); stop instead of churning to max_steps. A legit retry
-#                 changes the screen (different fingerprint), so it is not counted.
+LOOP_DROP = 2   # after the same action is taken this many times on one screen, drop it from the
+#                 next view so Jev is forced to try something else (auto-recover from a cycle).
+LOOP_LIMIT = 3  # hard backstop: same action on the same screen this many times = a cycle (e.g. open
+#                 wrong account -> back -> open again); stop instead of churning to max_steps. A legit
+#                 retry changes the screen (different fingerprint), so it is not counted.
 MONEY_KEYS = ("amount", "recipient")
 ESCAPABLE = ("pending_element_missing", "pending_element_ambiguous")
 RESYNC_WINDOW = 3  # after a Jev fallback, look this many recorded steps ahead
@@ -283,6 +285,13 @@ class Runner:
             decision = None
         else:
             view = scrub(page, self.secrets)
+            looped = self._looped_locators(page)
+            if looped:
+                kept = [a for a in view["actions"]
+                        if tuple(sorted(locator_of(a).items())) not in looped]
+                if not any(a.get("kind") not in ("wait", "scroll") for a in kept):
+                    raise _Stop("blocked", "stuck_in_loop")  # nothing else to try on this screen
+                view = {**view, "actions": kept}  # force a different choice (auto-recover)
             if self._consecutive_waits() >= MAX_WAITS:
                 # Jev keeps stalling on a never-settling page: drop "wait" so it must act or stop.
                 view = {**view, "actions": [a for a in view["actions"] if a.get("kind") != "wait"]}
@@ -472,6 +481,23 @@ class Runner:
         self._jev_steps += 1
         self._dispatch(action, page, lambda: self._model_text(action, page))
 
+    def _looped_locators(self, page: dict) -> set:
+        """Locators of real actions already taken LOOP_DROP times on this exact screen — dropped
+        from the next view so Jev tries something else before the hard stop trips."""
+        fp = page.get("fingerprint")
+        if fp is None:
+            return set()
+        counts: dict = {}
+        for h in self.history:
+            # only true oscillation (the action changed the screen, yet we're back on it); a frozen
+            # screen is page_changed False and belongs to _no_progress, not here.
+            if (h.get("fingerprint") != fp or h.get("kind") in ("wait", "scroll")
+                    or h.get("page_changed") is not True):
+                continue
+            key = tuple(sorted((h.get("locator") or {}).items()))
+            counts[key] = counts.get(key, 0) + 1
+        return {k for k, n in counts.items() if n >= LOOP_DROP}
+
     def _looping(self, page: dict, action: dict) -> bool:
         """True when this exact action has already been taken LOOP_LIMIT times on this exact screen
         (same fingerprint + same locator) — an oscillation the no-progress check can't see, because
@@ -481,7 +507,7 @@ class Runner:
             return False
         key = tuple(sorted(locator_of(action).items()))
         seen = sum(1 for h in self.history
-                   if h.get("fingerprint") == fp
+                   if h.get("fingerprint") == fp and h.get("page_changed") is True
                    and tuple(sorted((h.get("locator") or {}).items())) == key)
         return seen >= LOOP_LIMIT
 
