@@ -159,7 +159,11 @@ class ChromeTarget:
         try:
             self.browser.act(action, page, text=text)
         except Exception as exc:
-            # Input may already have been dispatched; never surface as StalePage.
+            # Upstream raises StalePage only from its pre-input hit-test (target moved or covered),
+            # before any input is dispatched: safe to re-observe and retry, not uncertain.
+            if _is_upstream_stale(exc):
+                raise StalePage(str(exc)) from exc
+            # Anything else: input may already have been dispatched; never surface as StalePage.
             raise RuntimeError(f"action_uncertain: {exc}") from exc
 
     def screenshot(self, path: Path) -> Path:

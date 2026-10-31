@@ -144,12 +144,13 @@ def test_fresh_check_upstream_stale_translated():
     assert b.acts == []
 
 
-def test_act_upstream_stale_after_input_is_uncertain():
+def test_act_upstream_stale_is_retryable_not_uncertain():
+    # Upstream raises StalePage only from its pre-input hit-test, so nothing was dispatched:
+    # the Chrome target surfaces our StalePage (retryable), never action_uncertain.
     t, b = make()
-    b.act_exc = StalePage_("boom")
-    with pytest.raises(RuntimeError, match="action_uncertain") as e:
+    b.act_exc = StalePage_("Target changed or is covered. Observe again.")
+    with pytest.raises(StalePage):
         t.act({"kind": "fill", "node": 1}, {}, text="abc")
-    assert not isinstance(e.value, StalePage)
 
 
 def test_act_other_error_is_uncertain():
