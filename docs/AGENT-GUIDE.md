@@ -102,6 +102,9 @@ cards in some bank apps need.)
 - Small goals, one screen-level task each, reusing the `session_id`: log in → open transfer →
   fill → confirm → share receipt. Check `screenshot` between them when money is involved.
 - Banking sessions expire fast (BAC: ~8 minutes). Log in and go straight to the transfer.
+- **Bank login is entered by the human on the device, by design** — jev-runner does not auto-log-in
+  (the password is never delivered to the daemon). Expect: human types Contraseña on the Pad and taps
+  Ingresar, then you run the transfer. Don't try to fill the login password or look for a "login skill".
 - **Leave learning ON (it is the default).** Money runs are safe to learn: a replayed fill pulls
   this run's value fresh from `params` (`param:amount`), a stale recorded number is auto-rejected,
   secrets are never stored (always re-prompted), and every guard (amount+recipient match, the
