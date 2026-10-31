@@ -169,3 +169,27 @@ def test_screenshot_writes_file(tmp_path):
     t, _ = make()
     out = t.screenshot(tmp_path / "s.png")
     assert out.read_bytes() == b"PNG"
+
+
+def test_observe_exposes_password_field_as_secret_fill():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: ([{"node": 1000000, "label": "Password"}]
+                               if "password" in expr else True)
+    p = t.observe()
+    pw = [a for a in p["actions"] if a.get("password")]
+    assert len(pw) == 1
+    assert pw[0]["kind"] == "fill" and pw[0]["node"] == 1000000 and pw[0]["id"] == "pw1"
+    # the runner must see it as secret
+    from jev_runner.guards import is_secret_field
+    from jev_runner.config import Config
+    assert is_secret_field(pw[0], Config().secret_patterns)
+
+
+def test_observe_without_password_fields_is_unchanged():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: [] if "password" in expr else True
+    p = t.observe()
+    assert not any(a.get("password") for a in p["actions"]) and p["readable"] is True

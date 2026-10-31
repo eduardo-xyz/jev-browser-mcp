@@ -15,6 +15,28 @@ _LOADED_JS = (
 _monotonic = time.monotonic
 _sleep = time.sleep
 
+# Upstream's snapshot hides <input type=password> (snapshot.js: safe()), so a login form can't be
+# completed. We register each visible password input into upstream's own node map (at a high id, to
+# avoid colliding with its small ids) and expose it as a secret fill, which upstream act() can type
+# into. The value is never read back, so it never reaches the model, logs or the page fingerprint.
+_PASSWORD_JS = """(() => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes) return [];
+  const out = [], base = 1000000;
+  for (const e of document.querySelectorAll('input[type="password"]')) {
+    const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    if (e.disabled || e.readOnly) continue;
+    try { if (!e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) continue; } catch (_) {}
+    const id = base + out.length;
+    c.nodes.set(id, e);
+    const label = (e.getAttribute('aria-label') || e.getAttribute('placeholder') ||
+      (e.labels && e.labels[0] && e.labels[0].innerText) || e.name || 'Password').trim();
+    out.push({node: id, label});
+  }
+  return out;
+})()"""
+
 
 def _is_upstream_stale(exc: BaseException) -> bool:
     return any(c.__name__ == "StalePage" for c in type(exc).__mro__)
@@ -95,8 +117,26 @@ class ChromeTarget:
             if _is_upstream_stale(exc):
                 raise StalePage(str(exc)) from exc
             raise
+        self._add_password_fields(page)
         page["readable"] = True
         return page
+
+    def _add_password_fields(self, page: dict) -> None:
+        try:
+            found = self.browser.evaluate(_PASSWORD_JS)
+        except Exception:
+            return  # never let password discovery break a normal observe
+        if not isinstance(found, list) or not found:
+            return
+        actions = page.setdefault("actions", [])
+        existing = {a.get("id") for a in actions}
+        for i, f in enumerate(found):
+            aid = f"pw{i + 1}"
+            if aid in existing or not isinstance(f.get("node"), int):
+                continue
+            actions.append({"id": aid, "node": f["node"], "kind": "fill",
+                            "label": f.get("label") or "Password", "role": "textbox",
+                            "value": "", "password": True})
 
     def fresh(self, page: dict) -> bool:
         try:
