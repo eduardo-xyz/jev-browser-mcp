@@ -51,6 +51,38 @@ def test_single_send_then_done(cfg):
     assert out["status"] == "done" and t.acted == [("s1", None)]
 
 
+def _osc_page(fp, cid, label):
+    return {"url": "u", "title": "t", "text": "", "readable": True, "fingerprint": fp,
+            "actions": [{"id": cid, "node": 1, "kind": "click", "label": label, "role": "button"}]}
+
+
+def test_oscillation_between_two_screens_is_stopped(cfg):
+    # open wrong account -> back -> open again -> ...  Each step changes the screen, so no_progress
+    # never fires; the loop detector must stop it well before max_steps.
+    pages = [_osc_page("FA", "a1", "Wrong"), _osc_page("FB", "b1", "Back")] * 5
+
+    def choose(page, goal, history):
+        aid = next(a["id"] for a in page["actions"] if a["kind"] == "click")
+        return {"choice": aid, "operation": aid, "target": None, "confidence": 1.0,
+                "probabilities": {aid: 1.0}, "latency_ms": 1, "usage": {}}
+
+    r = Runner("s", FakeTarget(pages), "g", None, cfg, max_steps=40, choose=choose)
+    out = r.run()
+    assert (out["status"], out["reason"]) == ("blocked", "stuck_in_loop")
+    assert len(r.history) < 10  # stopped at the cycle, not churned to max_steps
+
+
+def test_looping_counts_same_action_on_same_fingerprint(cfg):
+    r = Runner("s", FakeTarget([page()]), "g", None, cfg, choose=scripted_choose([]))
+    act = {"id": "e1", "node": 1, "kind": "click", "label": "X", "role": "button"}
+    pg = {"fingerprint": "F1", "actions": [act]}
+    assert not r._looping(pg, act)  # no history yet
+    r.history = [{"fingerprint": "F1", "locator": runner_mod.locator_of(act)} for _ in range(3)]
+    assert r._looping(pg, act)  # three prior identical taps on the same screen
+    assert not r._looping({"fingerprint": "OTHER", "actions": [act]}, act)  # different screen
+    assert not r._looping(pg, {**act, "kind": "scroll"})  # scroll is paced elsewhere
+
+
 def test_no_progress_blocks(cfg):
     t = FakeTarget([page(click("n1", "X"))], stuck_ids={"n1"})
     out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1"] * 3)).run()

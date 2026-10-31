@@ -36,6 +36,9 @@ from .targets.base import DeviceDisconnected, StalePage, Target, TargetBlocked
 UNREADABLE_TRIES = 3
 NO_PROGRESS = 3
 MAX_WAITS = 3  # a churny SPA never looks "settled"; after this many waits, force a real decision
+LOOP_LIMIT = 3  # same action on the same screen this many times = a cycle (e.g. open wrong account
+#                 -> back -> open again); stop instead of churning to max_steps. A legit retry
+#                 changes the screen (different fingerprint), so it is not counted.
 MONEY_KEYS = ("amount", "recipient")
 ESCAPABLE = ("pending_element_missing", "pending_element_ambiguous")
 RESYNC_WINDOW = 3  # after a Jev fallback, look this many recorded steps ahead
@@ -68,6 +71,7 @@ def history_entry(action: dict, page: dict, text: str | None, secret_patterns: l
         "text": "•••" if text is not None and is_secret_field(action, secret_patterns or []) else text,
         "page_changed": None,
         "where": page["url"],
+        "fingerprint": page.get("fingerprint"),  # for cycle detection (oscillation between screens)
         "signature": {"where": page["url"], "labels": element_labels(page)},
         "locator": locator,
         "value_source": None,
@@ -463,8 +467,23 @@ class Runner:
         action = next((a for a in page["actions"] if a["id"] == choice), None)
         if action is None:
             raise _Stop("error", "unknown_action")
+        if self._looping(page, action):
+            raise _Stop("blocked", "stuck_in_loop")
         self._jev_steps += 1
         self._dispatch(action, page, lambda: self._model_text(action, page))
+
+    def _looping(self, page: dict, action: dict) -> bool:
+        """True when this exact action has already been taken LOOP_LIMIT times on this exact screen
+        (same fingerprint + same locator) — an oscillation the no-progress check can't see, because
+        each step does change the screen. Scroll/wait are paced by their own caps, not here."""
+        fp = page.get("fingerprint")
+        if fp is None or action.get("kind") in ("scroll", "wait"):
+            return False
+        key = tuple(sorted(locator_of(action).items()))
+        seen = sum(1 for h in self.history
+                   if h.get("fingerprint") == fp
+                   and tuple(sorted((h.get("locator") or {}).items())) == key)
+        return seen >= LOOP_LIMIT
 
     def _check(self, page: dict) -> bool | None:
         """Second opinion on Jev's verdict from the text model; None when unavailable."""

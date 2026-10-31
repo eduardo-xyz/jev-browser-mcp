@@ -58,7 +58,7 @@ fine now — the socket is relocated to a short path when needed).
 |---|---|---|
 | `done` | Goal done and confirmed by an independent check of the final screen. | Next step. |
 | `unverified` | Jev said done, the check disagreed (`reason`). | Treat as NOT done. `screenshot`, then retry or fix the goal. |
-| `blocked` | Could not continue (`reason`, e.g. `jev_blocked`, `screen_unreadable`, `missing_value`). | `screen_unreadable` right after opening an app: wait 3 s and run again with the same `session_id`. `missing_value`: put the exact text in the goal. |
+| `blocked` | Could not continue (`reason`, e.g. `jev_blocked`, `screen_unreadable`, `missing_value`, `stuck_in_loop`). | `screen_unreadable` right after opening an app: wait 3 s and run again with the same `session_id`. `missing_value`: put the exact text in the goal. `stuck_in_loop`: Jev kept repeating the same tap on the same screen (e.g. opening the wrong account, going back, opening it again) — don't just retry; make the goal name the exact target ("open the account ending 0743", "tap exactly …") or `screenshot` to see where it's stuck. |
 | `paused_needs_input` | A password/PIN/code field (`field`). | `resume(session_id, input=<value>)`. Never write the value anywhere else. |
 | `paused_mismatch` | A money button, and the amount/recipient did not both match the screen (`expected` vs `seen`), or a second money action in one run. | Check `expected`/`seen` and a `screenshot`. Approve with `resume(session_id, confirm=True)` only if it is exactly the intended payment. |
 | `error` `money_action_uncertain` | A money tap may or may not have gone through. | Do NOT retry. Check the bank app's movements, then `end_session`. |
