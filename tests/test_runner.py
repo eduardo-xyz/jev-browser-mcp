@@ -190,3 +190,23 @@ def test_no_press_retry_for_send_confirm_or_checkbox(cfg):
         t = _PressTarget([page(act), page()], deaf={"n0"})
         Runner("s", t, "g", None, cfg, choose=scripted_choose(["n0", "DONE"]), learn=False).run()
         assert t.pressed == [], act["label"]
+
+
+def test_wait_action_dropped_after_cap_forces_decision(cfg):
+    # Jev stalls: it would pick "wait" forever on a churny page. After MAX_WAITS the runner
+    # removes the wait action, so the next decision must be a real action (here DONE).
+    seen_actions = []
+    def choose(view, goal, history):
+        seen_actions.append([a["kind"] for a in view["actions"]])
+        kinds = [a["kind"] for a in view["actions"]]
+        return {"choice": "DONE"} if "wait" not in kinds else {"choice": "w"}
+    pg = page(click("n0", "Open"))
+    # give the page a wait action id "w"
+    pg["actions"].append({"id": "w", "kind": "wait", "label": "Wait for the page to update"})
+    t = FakeTarget([pg] * 10)
+    r = Runner("s", t, "g", None, cfg, choose=choose, learn=False, verify=lambda g, p, h: (True, ""))
+    out = r.run()
+    assert out["status"] == "done"
+    # first MAX_WAITS views still offered wait; the one that forced DONE had no wait action
+    assert any("wait" not in ks for ks in seen_actions)
+    assert sum(1 for h in r.history if h["kind"] == "wait") == 3

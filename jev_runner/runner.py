@@ -34,6 +34,7 @@ from .targets.base import DeviceDisconnected, StalePage, Target, TargetBlocked
 
 UNREADABLE_TRIES = 3
 NO_PROGRESS = 3
+MAX_WAITS = 3  # a churny SPA never looks "settled"; after this many waits, force a real decision
 MONEY_KEYS = ("amount", "recipient")
 ESCAPABLE = ("pending_element_missing", "pending_element_ambiguous")
 RESYNC_WINDOW = 3  # after a Jev fallback, look this many recorded steps ahead
@@ -272,7 +273,14 @@ class Runner:
         replay = self._match_flow(page)
         if replay is None and self.flow is not None:
             self._resyncing = True
-        decision = None if replay else self._decide(scrub(page, self.secrets))
+        if replay:
+            decision = None
+        else:
+            view = scrub(page, self.secrets)
+            if self._consecutive_waits() >= MAX_WAITS:
+                # Jev keeps stalling on a never-settling page: drop "wait" so it must act or stop.
+                view = {**view, "actions": [a for a in view["actions"] if a.get("kind") != "wait"]}
+            decision = self._decide(view)
         try:
             if replay:
                 self._replay(*replay, page)
@@ -283,6 +291,15 @@ class Runner:
             self.page = {}
             if self._stale >= 3:
                 raise
+
+    def _consecutive_waits(self) -> int:
+        n = 0
+        for h in reversed(self.history):
+            if h.get("kind") == "wait":
+                n += 1
+            else:
+                break
+        return n
 
     def _no_progress(self) -> bool:
         last = self.history[-NO_PROGRESS:]
