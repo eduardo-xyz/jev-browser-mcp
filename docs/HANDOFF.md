@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; 302 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 304 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -165,6 +165,13 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   Chrome weakness: on saucedemo.com login, Jev looped re-filling Username and never advanced to the Password
   field, then returned BLOCKED on a directed retry. Multi-field web form login needs work in the Chrome target /
   page model before autonomous web checkout is trustworthy. Guard itself is enforced by the shared code path.
+
+- 2026-10-30 Chrome web-login FIXED and verified live on saucedemo (commit 9661d11): password inputs, which
+  upstream's snapshot omits, are now exposed as secret fills via upstream's node map; login completed, value masked.
+  Also fixed: a pre-input upstream stale is retryable, not action_uncertain (c3bbb28). Checkout then stalled on two
+  things, both environmental/non-login: a browser 'Save password?' extension popup (profile-level, outside the page
+  DOM, covering the cart) and add-to-cart clicks not registering. For clean web tests use a Chrome profile with no
+  password-save prompt / extensions. 304 tests.
 
 ## Known residuals after final review (2026-10-29)
 
