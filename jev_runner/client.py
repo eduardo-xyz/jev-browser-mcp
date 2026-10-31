@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _socket_path() -> Path:
-    return config.data_dir() / "jevd.sock"
+    return config.socket_path(config.data_dir())
 
 
 def _connect(path: Path) -> socket.socket:

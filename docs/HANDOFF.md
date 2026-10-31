@@ -26,7 +26,7 @@ Read, in order:
   `runner.py` (step loop, pause/resume, money guard, receipts), `result.py`, `daemon.py`
   (`jevd`, unix socket, sessions, device lock, TTL), `client.py` (autostart + call).
   `server.py` = MCP tools `run_task, resume, screenshot, end_session, status, list_flows, delete_flow`.
-- Tests: `uv run pytest -q` (offline; 304 tests; no device, no network, no keys).
+- Tests: `uv run pytest -q` (offline; 306 tests; no device, no network, no keys).
 - Test fixture: `tests/fixtures/android/bac_login.xml` (real BAC bank login dump, username redacted).
 - Process ledger (git-ignored, may not exist on another machine):
   `.superpowers/sdd/2026-10-29-jev-multi-target/progress.md` — every task, review round and ruling.
@@ -172,6 +172,16 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   things, both environmental/non-login: a browser 'Save password?' extension popup (profile-level, outside the page
   DOM, covering the cart) and add-to-cart clicks not registering. For clean web tests use a Chrome profile with no
   password-save prompt / extensions. 304 tests.
+
+- 2026-10-30 Turbo (DA, read-only) shakedown findings: (1) jev MCP not registered in his session (needs
+  `claude mcp add`); (2) Browser Harness again attached the wrong Chrome (DA sign-in page) — fixed by a separate jevd
+  with BU_CDP_URL/BU_NAME + own JEV_DATA_DIR; (3) **AF_UNIX socket path too long** under a long JEV_DATA_DIR — FIXED:
+  config.socket_path relocates the socket to /tmp/jevd-<hash>.sock when the natural path exceeds 100 chars (306 tests).
+  GHL read-only nav worked (workflows list, custom values ~2-3 s); jev_blocked when a 'Workflow Maps' promo popover
+  covered the list and on a Reporting link; dashboard stuck 'Initializing' -> unverified. DA tasks slow by hand and
+  worth flows: find a rooftop's workflow across ~230 sub-accounts (switch location -> Automation -> search -> open);
+  read a workflow definition; compare a workflow across rooftops. Docs: AGENT-GUIDE now covers profile targeting.
+  Open ideas: goal-level retry on jev_blocked; dismiss overlay popovers; SPA 'still initializing' as wait-not-done.
 
 ## Known residuals after final review (2026-10-29)
 

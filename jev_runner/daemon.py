@@ -20,6 +20,7 @@ from uuid import uuid4
 from . import config, result
 from .adb_link import AdbLink
 from .config import Config
+from .config import socket_path as config_socket_path
 from .flows import FlowStore, slug
 from .runner import Runner
 from .targets.base import DeviceDisconnected, TargetBlocked
@@ -396,7 +397,7 @@ class Daemon:
 
 
 def socket_path(cfg: Config) -> Path:
-    return cfg.data_dir / "jevd.sock"
+    return config_socket_path(cfg.data_dir)
 
 
 class _Handler(socketserver.StreamRequestHandler):

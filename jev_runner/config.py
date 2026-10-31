@@ -1,14 +1,28 @@
 """Daemon configuration: data directory and config.toml loading."""
+import hashlib
 import os
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
+
+# A unix socket path must fit the OS limit (104 chars on macOS); a long JEV_DATA_DIR would overflow it.
+_SOCK_MAX = 100
 
 
 def data_dir() -> Path:
     path = Path(os.environ.get("JEV_DATA_DIR") or Path.home() / ".local/share/jev-runner")
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def socket_path(data: Path) -> Path:
+    """The jevd socket for a data dir. Client and daemon derive it the same way; when the natural
+    path is too long for AF_UNIX it moves to a short /tmp name keyed to the data dir (logs and
+    flows stay put). Distinct data dirs get distinct sockets, so instances don't collide."""
+    natural = data / "jevd.sock"
+    if len(str(natural)) <= _SOCK_MAX:
+        return natural
+    return Path("/tmp") / f"jevd-{hashlib.sha1(str(data).encode()).hexdigest()[:12]}.sock"
 
 
 @dataclass

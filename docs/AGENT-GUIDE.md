@@ -21,6 +21,26 @@ text-model key; `~/.local/share/jev-runner/config.toml` with the tablet serial, 
 and `navigation_labels`; the tablet on USB or the same Wi-Fi with wireless debugging on.
 Check with the `status` tool: `android.connected` must be `true`.
 
+If the `jev-runner` tools aren't in your session, register it once:
+`claude mcp add jev-runner -- uv run --directory /Users/eduardo/Projects/Personal/jev-browser-mcp --env-file .env python server.py`
+
+### Pointing at a specific Chrome profile
+
+For `target: "chrome"`, jev-runner drives whichever Chrome the Browser Harness daemon is attached to —
+which may not be the profile you want (this has picked the wrong profile repeatedly). **Always confirm
+the profile first**: open a known page and `screenshot`, before anything else.
+
+To bind an instance to one profile, launch that Chrome with its own remote-debugging port and run a
+**separate** jevd pointed at it, with its own data dir so it doesn't touch the shared instance:
+
+```bash
+BU_CDP_URL=http://127.0.0.1:9333 BU_NAME=<label> JEV_DATA_DIR=~/.local/share/jev-<label> \
+  uv run --directory /Users/eduardo/Projects/Personal/jev-browser-mcp --env-file .env python server.py
+```
+
+Each data dir gets its own socket automatically, so instances stay isolated (a long `JEV_DATA_DIR` is
+fine now — the socket is relocated to a short path when needed).
+
 ## Tools
 
 | Tool | Use |
