@@ -94,3 +94,7 @@ cards in some bank apps need.)
   fill → confirm → share receipt. Check `screenshot` between them when money is involved.
 - Banking sessions expire fast (BAC: ~8 minutes). Log in and go straight to the transfer.
 - `learn=False` for one-off money runs; save a verified run with `save_as` if it should replay.
+- **A modal or promo popover blocks everything** — Jev returns `blocked` because it can't read or
+  scroll under an overlay. Even on a read-only tour, allow dismissing it: add "first dismiss any
+  popover with Not now / Close / Skip / Dismiss / Got it / the X, then …". Dismissing a promo or
+  cookie banner is not a data change. (Don't accept anything that submits a form or changes records.)

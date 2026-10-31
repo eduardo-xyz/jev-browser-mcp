@@ -183,6 +183,14 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   read a workflow definition; compare a workflow across rooftops. Docs: AGENT-GUIDE now covers profile targeting.
   Open ideas: goal-level retry on jev_blocked; dismiss overlay popovers; SPA 'still initializing' as wait-not-done.
 
+- 2026-10-30 Turbo run 2: confirmed a promo/modal popover ('Workflow Maps', Not now/Try it now, no X) makes Jev
+  return `blocked` for any read/scroll under it; a read-only goal that forbade all clicks had nothing to do. Not a
+  jev bug: dismissing a promo is not a data change. AGENT-GUIDE now says to allow dismissing popovers (Not now/Close/
+  Skip/Dismiss/Got it/X) even on read-only tours. Also: Turbo's daemon start hit a transient NameError because the
+  repo was mid-edit (daemon.py/config.py) in another session — don't (auto)start a daemon while code is being edited;
+  stable at 10fd151. Possible generic feature later: a read_only run mode that blocks state-changing clicks but allows
+  navigation + overlay dismissal.
+
 ## Known residuals after final review (2026-10-29)
 
 Final whole-branch review + fix wave done (281 tests green). Open items, not yet fixed:
