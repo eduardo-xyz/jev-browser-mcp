@@ -22,14 +22,27 @@ READ_LIMIT = 20000  # cap merged read text so a huge page can't blow up a result
 # why a cross-origin (out-of-process) iframe must be read in its own CDP session and merged in.
 _READ_TEXT_JS = """(() => {
   const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
-  const text = (document.body ? document.body.innerText : "").trim();
-  const seen = new Set(), labels = [];
-  for (const e of document.querySelectorAll('button,[role="button"],a[href],[role="menuitem"],[role="link"],[role="tab"]')) {
-    if (!vis(e)) continue;
-    const l = (e.innerText || e.getAttribute("aria-label") || "").trim().replace(/\\s+/g, " ").slice(0, 80);
-    if (l && !seen.has(l)) { seen.add(l); labels.push(l); }
-  }
-  return {text, labels: labels.slice(0, 100)};
+  const seen = new Set(), labels = [], texts = [];
+  // innerText stops at EVERY iframe boundary, even same-origin, so recurse into frames we can
+  // reach. Cross-origin frames throw on contentDocument and are read via their own CDP target.
+  const scan = (doc, depth) => {
+    try {
+      const t = doc.body ? doc.body.innerText.trim() : "";
+      if (t) texts.push(t);
+      for (const e of doc.querySelectorAll('button,[role="button"],a[href],[role="menuitem"],[role="link"],[role="tab"]')) {
+        if (!vis(e)) continue;
+        const l = (e.innerText || e.getAttribute("aria-label") || "").trim().replace(/\\s+/g, " ").slice(0, 80);
+        if (l && !seen.has(l)) { seen.add(l); labels.push(l); }
+      }
+      if (depth < 5) for (const f of doc.querySelectorAll("iframe")) {
+        let d = null;
+        try { d = f.contentDocument; } catch (_) { d = null; }
+        if (d) scan(d, depth + 1);
+      }
+    } catch (_) {}
+  };
+  scan(document, 0);
+  return {text: texts.join("\\n").trim(), labels: labels.slice(0, 100)};
 })()"""
 
 

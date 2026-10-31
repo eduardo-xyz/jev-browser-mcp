@@ -48,7 +48,7 @@ fine now — the socket is relocated to a short path when needed).
 | `run_task(target, goal, url_or_app, params, money_params, max_steps, session_id, learn, save_as)` | One goal. `target` is `"android"` or `"chrome"`. `url_or_app`: Android package (preferred, e.g. `net.bac.sbe.android`, `com.whatsapp`) or URL. Pass `session_id` to continue in the same session. |
 | `resume(session_id, input, instruction, confirm)` | Continue a paused session. |
 | `screenshot(session_id)` | Saves a PNG of the screen, returns its path. Use it to check before approving anything. |
-| `read(session_id)` | Read-only. Returns the page's visible `text` and per-iframe `frames`, **including cross-origin iframes** the normal snapshot can't see (e.g. a white-labelled GHL automation screen). Use it to list/read content when a `run_task` only "waits" because the real UI is in an iframe. Never clicks or changes anything. |
+| `read(session_id)` | Read-only. Returns the page's visible `text` and per-iframe `frames`, **including cross-origin iframes** the normal snapshot can't see (e.g. a white-labelled GHL automation screen). Use it to list/read content when a `run_task` only "waits" because the real UI is in an iframe. **Let the page settle first** (read right after a short `run_task` can catch it still loading → few chars / `frames` empty; wait a few seconds or re-read). Only visible rows of a virtualised table are captured. Never clicks or changes anything. |
 | `end_session(session_id)` | Always call when finished, and after `money_action_uncertain`. |
 | `status`, `list_flows`, `delete_flow` | Housekeeping. |
 
