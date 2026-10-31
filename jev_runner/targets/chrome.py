@@ -1,5 +1,8 @@
 """ChromeTarget: drives a Chrome tab through upstream Browser Harness, recovering blank/hung tabs."""
 import base64
+import hashlib
+import json
+import sys
 import time
 from pathlib import Path
 
@@ -59,6 +62,35 @@ _CHILD_ORIGINS_JS = """(() => {
   }
   return [...out];
 })()"""
+
+
+# Resolve an observed node inside its frame, returning the element's centre in that frame's own
+# viewport coords, or null if it moved/vanished/is covered (so act can raise StalePage before any
+# input). Mirrors upstream's pre-input hit-test, but runs in the iframe's CDP session.
+_RESOLVE_IN_FRAME_FN = """(node => {
+  const e = window.__jevFast && window.__jevFast.nodes.get(node);
+  if (!e || !e.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) return null;
+  try { if (!e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) return null; } catch (_) {}
+  const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+  if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
+  if (!e.contains(document.elementFromPoint(x, y))) return null;
+  return {x, y};
+})"""
+
+# Position of this page's own <iframe> for `origin`, in the TOP viewport. An OOPIF's element lives
+# in the top document, so adding this offset to the in-frame centre gives top-viewport coords the
+# compositor routes into the iframe. (First match by origin; one content iframe per page in practice.)
+_IFRAME_OFFSET_FN = """(origin => {
+  for (const f of document.querySelectorAll('iframe')) {
+    try {
+      if (new URL(f.src, location.href).origin === origin) {
+        const r = f.getBoundingClientRect();
+        return {x: r.x, y: r.y, w: r.width, h: r.height};
+      }
+    } catch (_) {}
+  }
+  return null;
+})"""
 
 
 def _origin(url: str) -> str | None:
@@ -211,8 +243,65 @@ class ChromeTarget:
             raise
         self._add_password_fields(page)
         self._add_overlay_actions(page)
+        self._merge_iframe_actions(page)
         page["readable"] = True
         return page
+
+    def _merge_iframe_actions(self, page: dict) -> None:
+        """Surface actions from cross-origin (OOPIF) child frames so Jev can choose them. Each gets
+        a frame-namespaced id and a `frame` tag; act() routes it to the owning frame's session.
+        The money guard is unchanged: it classifies by label in the runner, so an iframe money
+        button is guarded exactly like a top-frame one."""
+        for frame in getattr(self, "_frames", {}).values():
+            self._detach(frame["session"])  # release last observe's frame sessions
+        self._frames: dict[int, dict] = {}
+        actions = page.setdefault("actions", [])
+        existing = {a.get("id") for a in actions}
+        try:
+            targets = self._iframe_targets()
+        except Exception:
+            return  # never let iframe discovery break a normal observe
+        for idx, (session_id, url) in enumerate(targets, start=1):
+            snap = self._frame_snapshot(session_id)
+            if not isinstance(snap, dict):
+                self._detach(session_id)
+                continue
+            self._frames[idx] = {"session": session_id, "origin": _origin(url)}
+            for a in snap.get("actions", []):
+                if a.get("kind") in ("scroll", "wait") or not isinstance(a.get("node"), int):
+                    continue
+                aid = f"f{idx}{a.get('id', '')}"
+                if aid in existing:
+                    continue
+                existing.add(aid)
+                merged = {"id": aid, "node": a["node"], "kind": a.get("kind"),
+                          "label": a.get("label", ""), "role": a.get("role", ""),
+                          "value": a.get("value", ""), "frame": idx}
+                for key in ("checked", "selected", "expanded"):
+                    if key in a:
+                        merged[key] = a[key]
+                actions.append(merged)
+        if self._frames:
+            # The upstream fingerprint only covers the top frame, so a change confined to an iframe
+            # would read as "no progress" and stall the run. Fold the iframe actions into it so an
+            # iframe change is seen as progress. (Top-only pages are left exactly as upstream made them.)
+            frame_sig = json.dumps(
+                [(a["id"], a.get("label"), a.get("value")) for a in actions if a.get("frame")],
+                sort_keys=True)
+            page["fingerprint"] = hashlib.sha256(
+                (str(page.get("fingerprint", "")) + frame_sig).encode()).hexdigest()
+
+    def _frame_snapshot(self, session_id) -> dict | None:
+        from jev_ultrafast.browser import READ_STATE
+        try:
+            res = _cdp("Runtime.evaluate", session_id=session_id,
+                       expression=READ_STATE, returnByValue=True)
+        except Exception:
+            return None
+        if res.get("exceptionDetails"):
+            return None
+        value = (res.get("result") or {}).get("value")
+        return value if isinstance(value, dict) else None
 
     def _add_overlay_actions(self, page: dict) -> None:
         try:
@@ -372,6 +461,9 @@ class ChromeTarget:
             raise
 
     def act(self, action: dict, page: dict, text: str | None = None, verify: bool = False) -> None:
+        if action.get("frame") is not None:
+            self._act_in_frame(action, text)  # OOPIF: separate path; top-frame/money path unchanged
+            return
         # Freshness is checked here, before any input; our StalePage is only ever raised from this check.
         try:
             is_fresh = self.browser.fresh(page, action)
@@ -391,6 +483,58 @@ class ChromeTarget:
             # Anything else: input may already have been dispatched; never surface as StalePage.
             raise RuntimeError(f"action_uncertain: {exc}") from exc
 
+    def _act_in_frame(self, action: dict, text: str | None) -> None:
+        """Click/fill an element inside a cross-origin iframe by translating its in-frame centre to
+        top-viewport coords and dispatching on the top session (the compositor routes by position).
+        Resolution runs before any input, so a moved/covered target raises StalePage (retryable);
+        once input is dispatched, any failure is action_uncertain."""
+        frame = getattr(self, "_frames", {}).get(action.get("frame"))
+        if not frame:
+            raise StalePage("Frame gone since this decision. Observe again.")
+        center = self._resolve_in_frame(frame["session"], action["node"])
+        if center is None:
+            raise StalePage("Target changed or is covered. Observe again.")
+        offset = self._iframe_offset(frame["origin"])
+        if offset is None:
+            raise StalePage("Iframe moved since this decision. Observe again.")
+        x, y = offset["x"] + center["x"], offset["y"] + center["y"]
+        try:
+            self._dispatch(action, x, y, text)
+        except Exception as exc:  # input may already be in flight: never a retryable StalePage
+            raise RuntimeError(f"action_uncertain: {exc}") from exc
+
+    def _resolve_in_frame(self, session_id, node) -> dict | None:
+        try:
+            res = _cdp("Runtime.evaluate", session_id=session_id,
+                       expression=f"{_RESOLVE_IN_FRAME_FN}({int(node)})", returnByValue=True)
+        except Exception:
+            return None
+        if res.get("exceptionDetails"):
+            return None
+        value = (res.get("result") or {}).get("value")
+        return value if isinstance(value, dict) else None
+
+    def _iframe_offset(self, origin: str | None) -> dict | None:
+        if not origin:
+            return None
+        try:
+            value = self.browser.evaluate(f"{_IFRAME_OFFSET_FN}({json.dumps(origin)})")
+        except Exception:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def _dispatch(self, action: dict, x: float, y: float, text: str | None) -> None:
+        for event in ("mousePressed", "mouseReleased"):
+            self.browser.call("Input.dispatchMouseEvent", type=event, x=x, y=y,
+                              button="left", clickCount=1)
+        if action.get("kind") == "fill":
+            mod = 4 if sys.platform == "darwin" else 2  # Cmd on macOS, Ctrl elsewhere
+            self.browser.call("Input.dispatchKeyEvent", type="keyDown", key="a", code="KeyA",
+                              modifiers=mod, commands=["selectAll"])
+            self.browser.call("Input.dispatchKeyEvent", type="keyUp", key="a", code="KeyA",
+                              modifiers=mod)
+            self.browser.call("Input.insertText", text=text or "")
+
     def screenshot(self, path: Path) -> Path:
         data = self.browser.call("Page.captureScreenshot", format="png")["data"]
         path = Path(path)
@@ -398,4 +542,6 @@ class ChromeTarget:
         return path
 
     def close(self) -> None:
+        for frame in getattr(self, "_frames", {}).values():
+            self._detach(frame["session"])
         self._close_quiet(self.browser)

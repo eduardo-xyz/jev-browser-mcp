@@ -327,6 +327,94 @@ def test_read_stops_at_settle_deadline(monkeypatch):
     assert out["text"]  # returned without hanging
 
 
+def test_observe_merges_iframe_actions_tagged_with_frame(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: []  # no password / overlay actions
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
+        {"id": "e1", "node": 5, "kind": "click", "label": "Create workflow", "role": "button", "value": ""},
+        {"id": "scroll_down", "kind": "scroll", "label": "Scroll down"}]})
+    page = t.observe()
+    frame_actions = [a for a in page["actions"] if a.get("frame")]
+    assert len(frame_actions) == 1
+    a = frame_actions[0]
+    assert a == {"id": "f1e1", "node": 5, "kind": "click", "label": "Create workflow",
+                 "role": "button", "value": "", "frame": 1}
+    assert t._frames[1] == {"session": "S1", "origin": "https://content.other"}
+    # iframe actions are folded into the fingerprint so an iframe change counts as progress
+    assert isinstance(page.get("fingerprint"), str) and page["fingerprint"]
+
+
+def test_observe_iframe_change_changes_fingerprint(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: []
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    snaps = iter([
+        {"actions": [{"id": "e1", "node": 1, "kind": "click", "label": "Round Robin"}]},
+        {"actions": [{"id": "e1", "node": 1, "kind": "click", "label": "Round Robin (editing)"}]},
+    ])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: next(snaps))
+    fp1 = t.observe()["fingerprint"]
+    fp2 = t.observe()["fingerprint"]
+    assert fp1 != fp2  # a label change inside the iframe is visible as progress
+
+
+def test_act_routes_iframe_action_with_translated_coords(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    t._frames = {1: {"session": "S1", "origin": "https://content.other"}}
+    monkeypatch.setattr(t, "_resolve_in_frame", lambda sid, node: {"x": 30, "y": 20})
+    monkeypatch.setattr(t, "_iframe_offset", lambda origin: {"x": 100, "y": 50, "w": 1, "h": 1})
+    t.act({"id": "f1e1", "node": 5, "kind": "click", "frame": 1}, {})
+    mouse = [p for m, p in b.calls if m == "Input.dispatchMouseEvent"]
+    assert [p["type"] for p in mouse] == ["mousePressed", "mouseReleased"]
+    assert all(p["x"] == 130 and p["y"] == 70 for p in mouse)  # 100+30, 50+20
+    assert b.acts == []  # upstream act path is never used for an iframe action
+
+
+def test_act_iframe_fill_selects_all_then_inserts(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    t._frames = {1: {"session": "S1", "origin": "https://content.other"}}
+    monkeypatch.setattr(t, "_resolve_in_frame", lambda sid, node: {"x": 5, "y": 5})
+    monkeypatch.setattr(t, "_iframe_offset", lambda origin: {"x": 0, "y": 0, "w": 1, "h": 1})
+    t.act({"id": "f1e2", "node": 9, "kind": "fill", "frame": 1}, {}, text="hello")
+    methods = [m for m, _ in b.calls]
+    assert methods == ["Input.dispatchMouseEvent", "Input.dispatchMouseEvent",
+                       "Input.dispatchKeyEvent", "Input.dispatchKeyEvent", "Input.insertText"]
+    assert b.calls[-1][1]["text"] == "hello"
+
+
+def test_act_iframe_stale_before_dispatch_raises_stalepage(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    t._frames = {1: {"session": "S1", "origin": "https://content.other"}}
+    monkeypatch.setattr(t, "_resolve_in_frame", lambda sid, node: None)  # target gone
+    with pytest.raises(StalePage):
+        t.act({"id": "f1e1", "node": 5, "kind": "click", "frame": 1}, {})
+    assert not any(m.startswith("Input.") for m, _ in b.calls)  # nothing dispatched
+
+
+def test_act_iframe_unknown_frame_raises_stalepage():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    t._frames = {}
+    with pytest.raises(StalePage):
+        t.act({"id": "f9e1", "node": 5, "kind": "click", "frame": 9}, {})
+
+
+def test_act_top_frame_action_unchanged_by_oopif_branch():
+    # an action with no `frame` still goes through the upstream (money-safe) path verbatim
+    t, b = make()
+    t.act({"id": "e1", "node": 2, "kind": "click"}, {}, verify=True)
+    assert b.acts == [({"id": "e1", "node": 2, "kind": "click"}, None)]
+
+
 def test_overlay_button_already_in_actions_is_not_duplicated():
     f = FakeBrowserFactory(loaded=[True])
     t = ChromeTarget("https://x.test", browser_factory=f)

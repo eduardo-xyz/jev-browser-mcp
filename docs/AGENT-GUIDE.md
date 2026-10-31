@@ -107,6 +107,11 @@ cards in some bank apps need.)
   secrets are never stored (always re-prompted), and every guard (amount+recipient match, the
   one-money-action limit) runs again on replay. Don't pass `learn=False`. Use `save_as` to name a
   flow you want to replay by name, and pass `flow=<name>` next time to reuse it.
+- **Controls inside a cross-origin iframe are now actionable** (e.g. GHL's automation UI): they
+  appear as normal actions and `run_task` can click/fill them — no special syntax. Let the page
+  settle first (as with `read`). A *money* button inside an iframe will **pause for approval**
+  (the amount/recipient check reads the top-frame text, which can't see iframe amounts) — that's
+  the safe default, not a failure. (Experimental; validate with a `screenshot` on important steps.)
 - **A modal or promo popover blocks everything** — Jev returns `blocked` because it can't read or
   scroll under an overlay. Even on a read-only tour, allow dismissing it: add "first dismiss any
   popover with Not now / Close / Skip / Dismiss / Got it / the X, then …". Dismissing a promo or
