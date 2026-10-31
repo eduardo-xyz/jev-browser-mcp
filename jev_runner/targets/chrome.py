@@ -33,6 +33,30 @@ _READ_TEXT_JS = """(() => {
 })()"""
 
 
+# Origins of this page's own cross-origin iframe srcs. The <iframe> element lives in the top
+# document even when its content runs out-of-process, so this is how we discover which iframe
+# targets belong to this page (the parent frame tree omits out-of-process children).
+_CHILD_ORIGINS_JS = """(() => {
+  const out = new Set();
+  for (const f of document.querySelectorAll('iframe')) {
+    try {
+      const o = new URL(f.src, location.href).origin;
+      if (o && o !== 'null' && o !== location.origin) out.add(o);
+    } catch (_) {}
+  }
+  return [...out];
+})()"""
+
+
+def _origin(url: str) -> str | None:
+    from urllib.parse import urlsplit
+    try:
+        s = urlsplit(url)
+    except ValueError:
+        return None
+    return f"{s.scheme}://{s.netloc}" if s.scheme and s.netloc else None
+
+
 def _cdp(method, **params):
     """Raw CDP through Browser Harness; imported lazily and indirected here so tests can stub it."""
     from browser_harness.helpers import cdp
@@ -215,24 +239,42 @@ class ChromeTarget:
         """Read-only merged text of the top frame and every cross-origin (OOPIF) child frame.
 
         The normal snapshot only sees the top frame, so pages that render their UI inside a
-        cross-origin iframe (e.g. a white-labelled GHL automation screen) look empty. This reads
-        each such frame in its own CDP session and merges the visible text and control labels.
-        It never clicks, fills or assigns node ids.
+        cross-origin iframe (e.g. a white-labelled GHL automation screen) look empty. A cross-
+        origin iframe is a separate CDP target that does NOT appear in the parent's frame tree,
+        but its ``<iframe>`` element IS in the top document, so we match iframe targets by the
+        origins of this page's own iframe srcs, read each in its own session, and merge. Content
+        is deduped (two tabs showing the same page yield one block). Never clicks or fills.
         """
         parts: list[str] = []
         frames: list[dict] = []
-        self._collect_frame_text(self._session(), parts, None)
-        for session_id, info in self._child_iframe_sessions():
-            before = len(parts)
-            self._collect_frame_text(session_id, parts, info.get("url"))
-            if len(parts) > before:
-                frames.append({"url": info.get("url", ""),
-                               "text": "\n".join(parts[before:])[:READ_LIMIT]})
+        seen: set[str] = set()
+        top = self._block(self._top_read())
+        if top:
+            parts.append(top)
+            seen.add(top)
+        for session_id, url in self._iframe_targets():
+            try:
+                block = self._block(self._frame_text(session_id))
+            finally:
+                self._detach(session_id)
+            if not block or block in seen:
+                continue
+            seen.add(block)
+            frames.append({"url": url, "text": block[:READ_LIMIT]})
+            parts.append(f"[frame {url}]\n{block}")
         return {"url": self._location(), "text": "\n".join(parts)[:READ_LIMIT],
                 "frames": frames, "readable": True}
 
-    def _session(self):
-        return getattr(self.browser, "session", None)
+    @staticmethod
+    def _block(data: dict) -> str:
+        text = (data.get("text") or "").strip()
+        labels = data.get("labels") or []
+        out = []
+        if text:
+            out.append(text)
+        if labels:
+            out.append("Actions: " + " | ".join(labels))
+        return "\n".join(out)
 
     def _location(self) -> str:
         try:
@@ -241,18 +283,12 @@ class ChromeTarget:
             url = None
         return url if isinstance(url, str) and url else self.url
 
-    def _collect_frame_text(self, session_id, parts: list[str], frame_url: str | None) -> None:
-        data = self._frame_text(session_id)
-        text = (data.get("text") or "").strip()
-        labels = data.get("labels") or []
-        if not text and not labels:
-            return
-        if frame_url:
-            parts.append(f"[frame {frame_url}]")
-        if text:
-            parts.append(text)
-        if labels:
-            parts.append("Actions: " + " | ".join(labels))
+    def _top_read(self) -> dict:
+        try:
+            value = self.browser.evaluate(_READ_TEXT_JS)
+        except Exception:
+            return {}
+        return value if isinstance(value, dict) else {}
 
     def _frame_text(self, session_id) -> dict:
         try:
@@ -265,28 +301,17 @@ class ChromeTarget:
         value = (res.get("result") or {}).get("value")
         return value if isinstance(value, dict) else {}
 
-    def _child_frame_urls(self) -> list[str]:
+    def _child_origins(self) -> set[str]:
         try:
-            tree = _cdp("Page.getFrameTree", session_id=self._session()).get("frameTree", {})
+            origins = self.browser.evaluate(_CHILD_ORIGINS_JS)
         except Exception:
-            return []
-        urls: list[str] = []
+            return set()
+        return {o for o in origins if isinstance(o, str)} if isinstance(origins, list) else set()
 
-        def walk(node: dict, top: bool) -> None:
-            if not top:
-                u = (node.get("frame") or {}).get("url")
-                if u and u != "about:blank":
-                    urls.append(u)
-            for child in node.get("childFrames") or []:
-                walk(child, top=False)
-
-        walk(tree, top=True)
-        return urls
-
-    def _child_iframe_sessions(self) -> list[tuple]:
-        """Attach a CDP session to each cross-origin child frame of THIS page (matched by url)."""
-        urls = set(self._child_frame_urls())
-        if not urls:
+    def _iframe_targets(self) -> list[tuple]:
+        """(session_id, url) for each cross-origin iframe target whose origin this page embeds."""
+        origins = self._child_origins()
+        if not origins:
             return []
         try:
             targets = _cdp("Target.getTargets").get("targetInfos", [])
@@ -294,15 +319,22 @@ class ChromeTarget:
             return []
         out = []
         for info in targets:
-            if info.get("type") != "iframe" or info.get("url") not in urls:
+            if info.get("type") != "iframe" or _origin(info.get("url") or "") not in origins:
                 continue
             try:
                 session_id = _cdp("Target.attachToTarget",
                                   targetId=info["targetId"], flatten=True)["sessionId"]
             except Exception:
                 continue
-            out.append((session_id, info))
+            out.append((session_id, info.get("url", "")))
         return out
+
+    @staticmethod
+    def _detach(session_id) -> None:
+        try:
+            _cdp("Target.detachFromTarget", sessionId=session_id)
+        except Exception:
+            pass
 
     def fresh(self, page: dict) -> bool:
         try:

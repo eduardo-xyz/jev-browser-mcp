@@ -213,29 +213,37 @@ def test_observe_exposes_overlay_buttons_not_already_present():
     assert all(a["kind"] == "click" and isinstance(a["node"], int) for a in ov)
 
 
+def _top_eval(mapping):
+    """Browser.evaluate stub: child-origins list, location.href, and the top-frame read dict."""
+    def ev(expr):
+        if "new URL(f.src" in expr:
+            return mapping.get("origins", [])
+        if "location.href" in expr:
+            return mapping.get("url", "https://app.example/x")
+        if "querySelectorAll('button" in expr:
+            return mapping.get("top", {})
+        return True
+    return ev
+
+
 def test_read_merges_top_and_cross_origin_iframe(monkeypatch):
     f = FakeBrowserFactory(loaded=[True])
     t = ChromeTarget("https://app.example/x", browser_factory=f)
-    f.browsers[0].session = "TOP"
+    f.browsers[0].evaluate = _top_eval({"origins": ["https://content.other"],
+                                        "top": {"text": "Workflows", "labels": ["Create workflow"]}})
 
     def fake_cdp(method, **kw):
-        if method == "Page.getFrameTree":
-            return {"frameTree": {"frame": {"url": "https://app.example/x"},
-                                  "childFrames": [{"frame": {"url": "https://content.other/app"}}]}}
         if method == "Target.getTargets":
             return {"targetInfos": [
                 {"type": "page", "url": "https://app.example/x", "targetId": "P"},
-                {"type": "iframe", "url": "https://content.other/app", "targetId": "IF"},
-                {"type": "iframe", "url": "https://unrelated.tab/zzz", "targetId": "OTHER"}]}
+                {"type": "iframe", "url": "https://content.other/app?loc=1", "targetId": "IF"},
+                {"type": "iframe", "url": "https://ads.unrelated/banner", "targetId": "OTHER"}]}
         if method == "Target.attachToTarget":
-            assert kw["targetId"] == "IF"  # only this page's child, never the unrelated iframe
+            assert kw["targetId"] == "IF"  # origin match only; the unrelated iframe is skipped
             return {"sessionId": "IFSESS"}
-        if method == "Runtime.evaluate":
-            if kw.get("session_id") == "TOP":
-                return {"result": {"value": {"text": "Workflows", "labels": ["Create workflow"]}}}
-            if kw.get("session_id") == "IFSESS":
-                return {"result": {"value": {"text": "Round Robin\nStop AI when task is made",
-                                             "labels": ["Publish"]}}}
+        if method == "Runtime.evaluate" and kw.get("session_id") == "IFSESS":
+            return {"result": {"value": {"text": "Round Robin\nStop AI when task is made",
+                                         "labels": ["Publish"]}}}
         return {}
 
     monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
@@ -243,23 +251,39 @@ def test_read_merges_top_and_cross_origin_iframe(monkeypatch):
     assert out["readable"] is True and out["url"] == "https://app.example/x"
     assert "Round Robin" in out["text"] and "Stop AI when task is made" in out["text"]
     assert "Create workflow" in out["text"] and "Publish" in out["text"]
-    assert [fr["url"] for fr in out["frames"]] == ["https://content.other/app"]
-    assert "Round Robin" in out["frames"][0]["text"]
+    assert [fr["url"] for fr in out["frames"]] == ["https://content.other/app?loc=1"]
+
+
+def test_read_dedupes_identical_iframes_from_two_tabs(monkeypatch):
+    # Two tabs open the same page -> two iframe targets with identical content; keep one block.
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = _top_eval({"origins": ["https://content.other"], "top": {"text": "Top"}})
+    attached = []
+
+    def fake_cdp(method, **kw):
+        if method == "Target.getTargets":
+            return {"targetInfos": [
+                {"type": "iframe", "url": "https://content.other/app", "targetId": "IF1"},
+                {"type": "iframe", "url": "https://content.other/app", "targetId": "IF2"}]}
+        if method == "Target.attachToTarget":
+            attached.append(kw["targetId"])
+            return {"sessionId": "S-" + kw["targetId"]}
+        if method == "Runtime.evaluate":
+            return {"result": {"value": {"text": "Same workflows", "labels": []}}}
+        return {}
+
+    monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
+    out = t.read()
+    assert attached == ["IF1", "IF2"]  # both attached (and detached)
+    assert len(out["frames"]) == 1 and out["text"].count("Same workflows") == 1
 
 
 def test_read_without_iframes_returns_top_only(monkeypatch):
     f = FakeBrowserFactory(loaded=[True])
     t = ChromeTarget("https://app.example/x", browser_factory=f)
-    f.browsers[0].session = "TOP"
-
-    def fake_cdp(method, **kw):
-        if method == "Page.getFrameTree":
-            return {"frameTree": {"frame": {"url": "https://app.example/x"}, "childFrames": []}}
-        if method == "Runtime.evaluate" and kw.get("session_id") == "TOP":
-            return {"result": {"value": {"text": "Just the top", "labels": []}}}
-        return {}
-
-    monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
+    f.browsers[0].evaluate = _top_eval({"origins": [], "top": {"text": "Just the top", "labels": []}})
+    monkeypatch.setattr(chrome_mod, "_cdp", lambda method, **kw: {})
     out = t.read()
     assert out["frames"] == [] and out["text"] == "Just the top" and out["readable"] is True
 
@@ -267,17 +291,9 @@ def test_read_without_iframes_returns_top_only(monkeypatch):
 def test_read_truncates_to_limit(monkeypatch):
     f = FakeBrowserFactory(loaded=[True])
     t = ChromeTarget("https://app.example/x", browser_factory=f)
-    f.browsers[0].session = "TOP"
     big = "x" * (chrome_mod.READ_LIMIT + 5000)
-
-    def fake_cdp(method, **kw):
-        if method == "Page.getFrameTree":
-            return {"frameTree": {"frame": {"url": "https://app.example/x"}, "childFrames": []}}
-        if method == "Runtime.evaluate":
-            return {"result": {"value": {"text": big, "labels": []}}}
-        return {}
-
-    monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
+    f.browsers[0].evaluate = _top_eval({"origins": [], "top": {"text": big, "labels": []}})
+    monkeypatch.setattr(chrome_mod, "_cdp", lambda method, **kw: {})
     assert len(t.read()["text"]) == chrome_mod.READ_LIMIT
 
 
