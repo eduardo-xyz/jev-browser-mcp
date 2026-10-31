@@ -213,6 +213,74 @@ def test_observe_exposes_overlay_buttons_not_already_present():
     assert all(a["kind"] == "click" and isinstance(a["node"], int) for a in ov)
 
 
+def test_read_merges_top_and_cross_origin_iframe(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].session = "TOP"
+
+    def fake_cdp(method, **kw):
+        if method == "Page.getFrameTree":
+            return {"frameTree": {"frame": {"url": "https://app.example/x"},
+                                  "childFrames": [{"frame": {"url": "https://content.other/app"}}]}}
+        if method == "Target.getTargets":
+            return {"targetInfos": [
+                {"type": "page", "url": "https://app.example/x", "targetId": "P"},
+                {"type": "iframe", "url": "https://content.other/app", "targetId": "IF"},
+                {"type": "iframe", "url": "https://unrelated.tab/zzz", "targetId": "OTHER"}]}
+        if method == "Target.attachToTarget":
+            assert kw["targetId"] == "IF"  # only this page's child, never the unrelated iframe
+            return {"sessionId": "IFSESS"}
+        if method == "Runtime.evaluate":
+            if kw.get("session_id") == "TOP":
+                return {"result": {"value": {"text": "Workflows", "labels": ["Create workflow"]}}}
+            if kw.get("session_id") == "IFSESS":
+                return {"result": {"value": {"text": "Round Robin\nStop AI when task is made",
+                                             "labels": ["Publish"]}}}
+        return {}
+
+    monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
+    out = t.read()
+    assert out["readable"] is True and out["url"] == "https://app.example/x"
+    assert "Round Robin" in out["text"] and "Stop AI when task is made" in out["text"]
+    assert "Create workflow" in out["text"] and "Publish" in out["text"]
+    assert [fr["url"] for fr in out["frames"]] == ["https://content.other/app"]
+    assert "Round Robin" in out["frames"][0]["text"]
+
+
+def test_read_without_iframes_returns_top_only(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].session = "TOP"
+
+    def fake_cdp(method, **kw):
+        if method == "Page.getFrameTree":
+            return {"frameTree": {"frame": {"url": "https://app.example/x"}, "childFrames": []}}
+        if method == "Runtime.evaluate" and kw.get("session_id") == "TOP":
+            return {"result": {"value": {"text": "Just the top", "labels": []}}}
+        return {}
+
+    monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
+    out = t.read()
+    assert out["frames"] == [] and out["text"] == "Just the top" and out["readable"] is True
+
+
+def test_read_truncates_to_limit(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].session = "TOP"
+    big = "x" * (chrome_mod.READ_LIMIT + 5000)
+
+    def fake_cdp(method, **kw):
+        if method == "Page.getFrameTree":
+            return {"frameTree": {"frame": {"url": "https://app.example/x"}, "childFrames": []}}
+        if method == "Runtime.evaluate":
+            return {"result": {"value": {"text": big, "labels": []}}}
+        return {}
+
+    monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
+    assert len(t.read()["text"]) == chrome_mod.READ_LIMIT
+
+
 def test_overlay_button_already_in_actions_is_not_duplicated():
     f = FakeBrowserFactory(loaded=[True])
     t = ChromeTarget("https://x.test", browser_factory=f)

@@ -15,6 +15,29 @@ _LOADED_JS = (
 _monotonic = time.monotonic
 _sleep = time.sleep
 
+READ_LIMIT = 20000  # cap merged read text so a huge page can't blow up a result
+
+# Read-only text + actionable labels of one frame. Never writes, never assigns node ids: this is
+# the "list/read" path, not the act path. innerText stops at iframe boundaries, which is exactly
+# why a cross-origin (out-of-process) iframe must be read in its own CDP session and merged in.
+_READ_TEXT_JS = """(() => {
+  const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
+  const text = (document.body ? document.body.innerText : "").trim();
+  const seen = new Set(), labels = [];
+  for (const e of document.querySelectorAll('button,[role="button"],a[href],[role="menuitem"],[role="link"],[role="tab"]')) {
+    if (!vis(e)) continue;
+    const l = (e.innerText || e.getAttribute("aria-label") || "").trim().replace(/\\s+/g, " ").slice(0, 80);
+    if (l && !seen.has(l)) { seen.add(l); labels.push(l); }
+  }
+  return {text, labels: labels.slice(0, 100)};
+})()"""
+
+
+def _cdp(method, **params):
+    """Raw CDP through Browser Harness; imported lazily and indirected here so tests can stub it."""
+    from browser_harness.helpers import cdp
+    return cdp(method, **params)
+
 # Upstream's snapshot hides <input type=password> (snapshot.js: safe()), so a login form can't be
 # completed. We register each visible password input into upstream's own node map (at a high id, to
 # avoid colliding with its small ids) and expose it as a secret fill, which upstream act() can type
@@ -187,6 +210,99 @@ class ChromeTarget:
             actions.append({"id": aid, "node": f["node"], "kind": "fill",
                             "label": f.get("label") or "Password", "role": "textbox",
                             "value": "", "password": True})
+
+    def read(self) -> dict:
+        """Read-only merged text of the top frame and every cross-origin (OOPIF) child frame.
+
+        The normal snapshot only sees the top frame, so pages that render their UI inside a
+        cross-origin iframe (e.g. a white-labelled GHL automation screen) look empty. This reads
+        each such frame in its own CDP session and merges the visible text and control labels.
+        It never clicks, fills or assigns node ids.
+        """
+        parts: list[str] = []
+        frames: list[dict] = []
+        self._collect_frame_text(self._session(), parts, None)
+        for session_id, info in self._child_iframe_sessions():
+            before = len(parts)
+            self._collect_frame_text(session_id, parts, info.get("url"))
+            if len(parts) > before:
+                frames.append({"url": info.get("url", ""),
+                               "text": "\n".join(parts[before:])[:READ_LIMIT]})
+        return {"url": self._location(), "text": "\n".join(parts)[:READ_LIMIT],
+                "frames": frames, "readable": True}
+
+    def _session(self):
+        return getattr(self.browser, "session", None)
+
+    def _location(self) -> str:
+        try:
+            url = self.browser.evaluate("location.href")
+        except Exception:
+            url = None
+        return url if isinstance(url, str) and url else self.url
+
+    def _collect_frame_text(self, session_id, parts: list[str], frame_url: str | None) -> None:
+        data = self._frame_text(session_id)
+        text = (data.get("text") or "").strip()
+        labels = data.get("labels") or []
+        if not text and not labels:
+            return
+        if frame_url:
+            parts.append(f"[frame {frame_url}]")
+        if text:
+            parts.append(text)
+        if labels:
+            parts.append("Actions: " + " | ".join(labels))
+
+    def _frame_text(self, session_id) -> dict:
+        try:
+            res = _cdp("Runtime.evaluate", session_id=session_id,
+                       expression=_READ_TEXT_JS, returnByValue=True)
+        except Exception:
+            return {}
+        if res.get("exceptionDetails"):
+            return {}
+        value = (res.get("result") or {}).get("value")
+        return value if isinstance(value, dict) else {}
+
+    def _child_frame_urls(self) -> list[str]:
+        try:
+            tree = _cdp("Page.getFrameTree", session_id=self._session()).get("frameTree", {})
+        except Exception:
+            return []
+        urls: list[str] = []
+
+        def walk(node: dict, top: bool) -> None:
+            if not top:
+                u = (node.get("frame") or {}).get("url")
+                if u and u != "about:blank":
+                    urls.append(u)
+            for child in node.get("childFrames") or []:
+                walk(child, top=False)
+
+        walk(tree, top=True)
+        return urls
+
+    def _child_iframe_sessions(self) -> list[tuple]:
+        """Attach a CDP session to each cross-origin child frame of THIS page (matched by url)."""
+        urls = set(self._child_frame_urls())
+        if not urls:
+            return []
+        try:
+            targets = _cdp("Target.getTargets").get("targetInfos", [])
+        except Exception:
+            return []
+        out = []
+        for info in targets:
+            if info.get("type") != "iframe" or info.get("url") not in urls:
+                continue
+            try:
+                session_id = _cdp("Target.attachToTarget",
+                                  targetId=info["targetId"], flatten=True)["sessionId"]
+            except Exception:
+                continue
+            out.append((session_id, info))
+        return out
 
     def fresh(self, page: dict) -> bool:
         try:

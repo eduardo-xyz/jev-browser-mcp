@@ -85,6 +85,15 @@ def screenshot(session_id: str) -> dict:
 
 
 @mcp.tool()
+def read(session_id: str) -> dict:
+    """Read-only: return the visible text of the session's current page, INCLUDING cross-origin
+    iframes the normal snapshot can't see (e.g. a white-labelled GHL automation screen). Use this
+    to list or read content when a `run_task` only "waits" because the real UI is inside an iframe.
+    Returns `text` (merged) and `frames` (per-iframe text). It never clicks or changes anything."""
+    return _call("read", {"session_id": session_id})
+
+
+@mcp.tool()
 def end_session(session_id: str) -> dict:
     """Close a session and release its device/browser. Required after money_action_uncertain."""
     return _call("end_session", {"session_id": session_id})

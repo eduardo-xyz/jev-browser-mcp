@@ -234,6 +234,22 @@ def test_screenshot_writes_under_screens(daemon_with_fakes, keys, cfg):
     assert r["ok"] and path.parent == cfg.data_dir / "screens" and path.exists()
 
 
+def test_read_falls_back_to_observe_text_for_plain_target(daemon_with_fakes, keys):
+    sid = run(daemon_with_fakes, target="android", goal="otp")["result"]["session_id"]
+    r = daemon_with_fakes.handle({"op": "read", "args": {"session_id": sid}})
+    assert r["ok"] and r["result"]["session_id"] == sid
+    assert "text" in r["result"] and r["result"]["frames"] == []
+
+
+def test_read_uses_target_reader_when_present(daemon_with_fakes, keys):
+    sid = run(daemon_with_fakes, target="android", goal="otp")["result"]["session_id"]
+    daemon_with_fakes.sessions[sid].target.read = lambda: {
+        "url": "u", "text": "iframe stuff", "frames": [{"url": "f", "text": "x"}], "readable": True}
+    r = daemon_with_fakes.handle({"op": "read", "args": {"session_id": sid}})
+    assert r["ok"] and r["result"]["text"] == "iframe stuff"
+    assert r["result"]["frames"] == [{"url": "f", "text": "x"}]
+
+
 def test_flows_listed_used_and_deleted(daemon_with_fakes, keys, cfg):
     store = FlowStore(cfg.data_dir / "flows")
     store.save(Flow(name="otp-flow", target="android", start=None, goal="otp"))

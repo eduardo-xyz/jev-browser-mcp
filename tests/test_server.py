@@ -13,7 +13,8 @@ def _tools():
 
 def test_tools_registered():
     assert set(_tools()) == {
-        "run_task", "resume", "screenshot", "end_session", "status", "list_flows", "delete_flow",
+        "run_task", "resume", "screenshot", "read", "end_session", "status",
+        "list_flows", "delete_flow",
     }
 
 
@@ -44,6 +45,7 @@ def test_run_task_forwards_all_args(monkeypatch):
 @pytest.mark.parametrize("tool,args,op", [
     ("resume", {"session_id": "s", "confirm": True}, "resume"),
     ("screenshot", {"session_id": "s"}, "screenshot"),
+    ("read", {"session_id": "s"}, "read"),
     ("end_session", {"session_id": "s"}, "end_session"),
     ("status", {}, "status"),
     ("list_flows", {}, "list_flows"),

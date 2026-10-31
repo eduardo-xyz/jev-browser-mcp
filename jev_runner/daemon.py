@@ -315,6 +315,27 @@ class Daemon:
                 session.last_used = time.time()
             return {"session_id": session_id, "path": str(out)}
 
+    def op_read(self, session_id: str) -> dict:
+        session = self._get(session_id)
+        with session.lock:
+            if session.closed:
+                raise OpError("unknown_session")
+            try:
+                reader = getattr(session.target, "read", None)
+                if reader is not None:
+                    out = reader()
+                else:  # targets without a dedicated reader: fall back to the observed text
+                    page = session.target.observe()
+                    out = {"url": page.get("url"), "text": page.get("text", ""),
+                           "frames": [], "readable": page.get("readable", True)}
+            except DeviceDisconnected:
+                raise OpError("device_disconnected") from None
+            except Exception as e:
+                raise OpError(f"read_failed: {type(e).__name__}") from None
+            finally:
+                session.last_used = time.time()
+            return {"session_id": session_id, **out}
+
     def op_end_session(self, session_id: str) -> dict:
         session = self._get(session_id)
         with session.lock:  # waits for an in-flight run: never close a target mid-action
