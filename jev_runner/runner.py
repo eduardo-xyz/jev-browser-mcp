@@ -116,6 +116,7 @@ class Runner:
         self.history: list[dict] = []
         self.page: dict = {}
         self.model_calls = 0
+        self.loop_events = 0  # times a cycle was detected (auto-recover drop or hard stop)
         self.elapsed_ms = 0
         self.secrets: list[str] = []
         self._secret_fields: set = set()  # locators of fields a secret was typed into
@@ -287,6 +288,7 @@ class Runner:
             view = scrub(page, self.secrets)
             looped = self._looped_locators(page)
             if looped:
+                self.loop_events += 1
                 kept = [a for a in view["actions"]
                         if tuple(sorted(locator_of(a).items())) not in looped]
                 if not any(a.get("kind") not in ("wait", "scroll") for a in kept):
@@ -477,6 +479,7 @@ class Runner:
         if action is None:
             raise _Stop("error", "unknown_action")
         if self._looping(page, action):
+            self.loop_events += 1
             raise _Stop("blocked", "stuck_in_loop")
         self._jev_steps += 1
         self._dispatch(action, page, lambda: self._model_text(action, page))

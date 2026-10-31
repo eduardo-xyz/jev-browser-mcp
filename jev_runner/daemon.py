@@ -79,6 +79,12 @@ class Daemon:
         self.target_factory = target_factory or self._default_target
         self.runner_factory = runner_factory
         self.store = FlowStore(cfg.data_dir / "flows")
+        try:  # a memory failure must never take the daemon down; runs just aren't recorded
+            from .memory import MemoryStore
+            self.memory = MemoryStore(cfg.data_dir / "memory.db")
+        except Exception:
+            self.memory = None
+            log.exception("experience memory unavailable")
         self.sessions: dict[str, Session] = {}
         self.devices: dict[str, str] = {}  # android device key -> session_id holding it
         self.targets_created = 0
@@ -132,7 +138,9 @@ class Daemon:
         """Run a Runner call under the session lock; BaseExceptions keep the session."""
         runner = session.runner
         try:
-            return fn()
+            out = fn()
+            self._record_run(session, out)
+            return out
         except BaseException as e:
             # Runner already turned ordinary errors into results; this is a cancel/interrupt.
             log.warning("session=%s runner raised %s", session.session_id, type(e).__name__)
@@ -143,6 +151,28 @@ class Daemon:
             raise OpError(f"interrupted: {type(e).__name__}") from e
         finally:
             session.last_used = time.time()
+
+    def _record_run(self, session: Session, out: dict) -> None:
+        """Record one run's metrics when it reaches a terminal status (not a pause). Best-effort:
+        the experience memory never affects the run's result."""
+        if self.memory is None or not isinstance(out, dict):
+            return
+        status = out.get("status")
+        if status is None or status.startswith("paused"):
+            return
+        r = session.runner
+        try:
+            self.memory.record_run(
+                target=session.kind, app=session.start,
+                goal=getattr(r, "_goal_raw", None) or getattr(r, "goal", "") or "",
+                status=status, reason=out.get("reason"),
+                verified=getattr(r, "verified", None),
+                steps=len(getattr(r, "history", []) or []),
+                duration_ms=out.get("elapsed_ms", 0),
+                loop_events=getattr(r, "loop_events", 0),
+                flow_used=out.get("flow_used"), flow_saved=out.get("flow_saved"))
+        except Exception:
+            log.exception("session=%s memory.record_run failed", session.session_id)
 
     def _close_session(self, session: Session) -> None:
         """Caller holds session.lock (or the session is otherwise idle)."""

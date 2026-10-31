@@ -250,6 +250,39 @@ def test_read_uses_target_reader_when_present(daemon_with_fakes, keys):
     assert r["result"]["frames"] == [{"url": "f", "text": "x"}]
 
 
+def test_record_run_terminal_scrubs_and_skips_paused(daemon_with_fakes):
+    d = daemon_with_fakes
+
+    class R:
+        _goal_raw = "pay 148000 to 88244852"
+        verified = True
+        history = [1, 2, 3]
+        loop_events = 2
+        goal = "g"
+
+    class S:
+        session_id = "s1"
+        kind = "android"
+        start = "net.bac.sbe.android"
+        runner = R()
+
+    d._record_run(S(), {"status": "paused_needs_input"})
+    assert d.memory._conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0  # pause not recorded
+    d._record_run(S(), {"status": "done", "elapsed_ms": 4200, "flow_saved": "f"})
+    row = d.memory._conn.execute("SELECT * FROM runs").fetchone()
+    assert row["status"] == "done" and row["steps"] == 3 and row["verified"] == 1
+    assert row["loop_events"] == 2 and row["duration_ms"] == 4200 and row["flow_saved"] == "f"
+    assert "88244852" not in row["goal"] and "148000" not in row["goal"]  # PII scrubbed
+
+
+def test_run_through_daemon_records_metrics(daemon_with_fakes, keys, script):
+    script.pages = lambda: [page(click("n1", "Next")), page()]
+    script.choices = [["n1", "DONE"]]
+    r = run(daemon_with_fakes, target="android", goal="navigate somewhere")
+    assert r["result"]["status"] == "done"
+    assert daemon_with_fakes.memory._conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
+
+
 def test_flows_listed_used_and_deleted(daemon_with_fakes, keys, cfg):
     store = FlowStore(cfg.data_dir / "flows")
     store.save(Flow(name="otp-flow", target="android", start=None, goal="otp"))
