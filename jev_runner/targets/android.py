@@ -220,8 +220,35 @@ class AndroidTarget:
                         sleep(0.3)  # opening the keyboard can scroll the field; look once more
                         if not _focus_ok(d, action, cx, cy):
                             raise StalePage()  # focus landed elsewhere; nothing typed yet
-                    d.send_keys(text or "", clear=True)
-                    # uiautomator2 types by pasting from the clipboard: never leave the value
+                    # Prefer set_text (no clipboard). send_keys pastes via clipboard and BAC
+                    # often leaves password/Código fields empty or toasts "pasted from clipboard".
+                    typed = False
+                    rid = action.get("resource_id") or ""
+
+                    def _try_set(sel):
+                        try:
+                            if sel is not None and getattr(sel, "exists", False):
+                                sel.set_text(text or "")
+                                return True
+                        except Exception:
+                            return False
+                        return False
+
+                    if rid and _try_set(d(resourceId=rid)):
+                        typed = True
+                    elif _try_set(d(focused=True)):
+                        typed = True
+                    if not typed:
+                        # Shell input text avoids the clipboard path entirely.
+                        try:
+                            raw = (text or "").replace(" ", "%s")
+                            d.shell(f"input text {raw}")
+                            typed = True
+                        except Exception:
+                            typed = False
+                    if not typed:
+                        d.send_keys(text or "", clear=True)
+                    # uiautomator2 may still use the clipboard for send_keys: never leave the value
                     # (often a password or code) there for other apps or keyboard history
                     try:
                         d.clipboard = ""

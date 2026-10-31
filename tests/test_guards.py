@@ -203,6 +203,15 @@ def test_malformed_amounts_fail_closed():
     assert parse_amount("₡ 150 000,00") == Decimal("150000.00")
 
 
+
+def test_navigation_labels_may_retry_tap_despite_money_prefix():
+    # "Transferir dinero" starts with money label "Transferir" but is nav — must press-retry.
+    cfg = Config(navigation_labels=["Transferir o pagar", "Transferir dinero"])
+    click = lambda label: {"kind": "click", "label": label}
+    assert may_retry_tap(click("Transferir dinero"), cfg)
+    assert may_retry_tap(click("Transferir o pagar"), cfg)
+    assert not may_retry_tap(click("Transferir"), cfg)  # bare money label still blocked
+
 def test_navigation_labels_are_never_money_actions():
     cfg = Config(navigation_labels=["Transferir o pagar", "Transferir dinero"])
     click = lambda label: {"kind": "click", "label": label}

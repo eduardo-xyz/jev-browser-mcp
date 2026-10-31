@@ -46,8 +46,20 @@ class FakeDevice:
         self.info_errors = {}
 
     def __call__(self, **kw):
-        assert kw == {"focused": True}
         d = self
+        if "resourceId" in kw:
+            rid = kw["resourceId"]
+
+            class RidSel:
+                @property
+                def exists(self):
+                    return True
+
+                def set_text(self, text):
+                    d.calls.append(("set_text", rid, text))
+
+            return RidSel()
+        assert kw == {"focused": True}
 
         class Sel:
             @property
@@ -60,6 +72,9 @@ class FakeDevice:
                     return {"bounds": d.focus_override}
                 x, y = d._last_tap
                 return {"bounds": {"left": x - 5, "top": y - 5, "right": x + 5, "bottom": y + 5}}
+
+            def set_text(self, text):
+                d.calls.append(("set_text", "focused", text))
 
         return Sel()
 
@@ -99,6 +114,8 @@ class FakeDevice:
         self.calls.append(("screenshot", path))
 
     def shell(self, cmd):
+        if str(cmd).startswith("input "):
+            self.calls.append(("shell", cmd))
         return SimpleNamespace(output=self.shell_out)
 
     def app_info(self, pkg):
@@ -151,7 +168,7 @@ def test_fill_clicks_then_types(fake_device, link):
     p = t.observe()
     f = next(a for a in p["actions"] if a.get("resource_id", "").endswith("txtUsername"))
     t.act(f, p, text="bob")
-    assert fake_device.calls[-1] == ("send_keys", "bob", True)
+    assert fake_device.calls[-1] == ("set_text", f["resource_id"], "bob")
     assert fake_device.calls[-2][0] == "click"
 
 
@@ -450,4 +467,4 @@ def test_fill_clears_clipboard_after_typing(fake_device, link):
     p = t.observe()
     f = next(a for a in p["actions"] if a["kind"] == "fill")
     t.act(f, p, text="s3cret")
-    assert fake_device.calls[-1][0] == "send_keys" and fake_device.clipboard == ""
+    assert fake_device.calls[-1][0] == "set_text" and fake_device.clipboard == ""
