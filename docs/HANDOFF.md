@@ -191,6 +191,18 @@ Verify with `uv run pytest -q`; for (a) a live check needs the tablet on USB + t
   stable at 10fd151. Possible generic feature later: a read_only run mode that blocks state-changing clicks but allows
   navigation + overlay dismissal.
 
+- 2026-10-31 ROOT CAUSE for GHL/DA Chrome "only waits then blocked": GoHighLevel (white-labeled app.envokedigital.com)
+  renders its automation UIs inside a CROSS-ORIGIN iframe (client-app-*.leadconnectorhq.com, an out-of-process iframe).
+  JEV Runner's Chrome snapshot (upstream jev_ultrafast/snapshot.js) runs only in the TOP frame, so it sees ~1 action
+  ('Wait...') and Jev waits every step. Proven: attaching to the iframe target and running snapshot.js there yields
+  28 real actions (Round Robin, 'Stop AI when task is made', Create workflow, ...). Fix needed = frame-aware observe+act:
+  discover child iframe targets of the tab, snapshot inside each (via browser_operation with the iframe session),
+  merge actions with per-frame id namespacing, and route act()/fresh() to the owning frame's session; OOPIF input
+  routing (coordinate space) is the hard part. Substantial — not a quick patch. Interim: a read-only extraction that
+  reads the iframe's text for list/read goals. Shipped this session (all generic, 309 tests): wait-cap (runner, churny
+  SPAs can't stall forever), overlay/dialog button exposure (chrome), password-field exposure, pre-input stale
+  retryable, web-checkout guard labels.
+
 ## Known residuals after final review (2026-10-29)
 
 Final whole-branch review + fix wave done (281 tests green). Open items, not yet fixed:
