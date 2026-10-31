@@ -38,6 +38,38 @@ _PASSWORD_JS = """(() => {
 })()"""
 
 
+# Buttons inside a modal/overlay (dialogs, promo popovers, cookie banners). Heavy SPA pages blow
+# past upstream's 250-action cap, so a dialog's "Not now"/"Close"/"Confirm" can be dropped and the
+# agent gets stuck behind an overlay it can't dismiss. We register these into upstream's own node
+# map (high ids, no collision) and expose them as clicks, so an overlay is always actionable.
+_OVERLAY_JS = """(() => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes) return [];
+  const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
+  const inOverlay = e => {
+    for (let n = e; n && n !== document.body; n = n.parentElement) {
+      if (n.getAttribute && (n.getAttribute('role') === 'dialog' || n.getAttribute('aria-modal') === 'true')) return true;
+      const s = getComputedStyle(n);
+      if ((s.position === 'fixed' || s.position === 'absolute') && (parseInt(s.zIndex) || 0) >= 1000) return true;
+    }
+    return false;
+  };
+  const out = [], base = 2000000, seen = new Set();
+  for (const e of document.querySelectorAll('button,[role="button"],a[role="button"],[role="menuitem"]')) {
+    if (!vis(e) || !inOverlay(e) || e.disabled) continue;
+    const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    const label = (e.innerText || e.getAttribute('aria-label') || e.value || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    const id = base + out.length;
+    c.nodes.set(id, e);
+    out.push({node: id, label});
+  }
+  return out.slice(0, 20);
+})()"""
+
+
 def _is_upstream_stale(exc: BaseException) -> bool:
     return any(c.__name__ == "StalePage" for c in type(exc).__mro__)
 
@@ -118,8 +150,26 @@ class ChromeTarget:
                 raise StalePage(str(exc)) from exc
             raise
         self._add_password_fields(page)
+        self._add_overlay_actions(page)
         page["readable"] = True
         return page
+
+    def _add_overlay_actions(self, page: dict) -> None:
+        try:
+            found = self.browser.evaluate(_OVERLAY_JS)
+        except Exception:
+            return  # never let overlay discovery break a normal observe
+        if not isinstance(found, list) or not found:
+            return
+        actions = page.setdefault("actions", [])
+        existing = {a.get("label") for a in actions}
+        for i, f in enumerate(found):
+            label = f.get("label")
+            if not isinstance(f.get("node"), int) or not label or label in existing:
+                continue
+            actions.append({"id": f"ov{i + 1}", "node": f["node"], "kind": "click",
+                            "label": label, "role": "button", "value": ""})
+            existing.add(label)
 
     def _add_password_fields(self, page: dict) -> None:
         try:

@@ -194,3 +194,33 @@ def test_observe_without_password_fields_is_unchanged():
     f.browsers[0].evaluate = lambda expr: [] if "password" in expr else True
     p = t.observe()
     assert not any(a.get("password") for a in p["actions"]) and p["readable"] is True
+
+
+def test_observe_exposes_overlay_buttons_not_already_present():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    def ev(expr):
+        if "password" in expr:
+            return []
+        if "aria-modal" in expr:  # the overlay JS
+            return [{"node": 2000000, "label": "Not now"}, {"node": 2000001, "label": "Try it now"}]
+        return True
+    b.evaluate = ev
+    p = t.observe()
+    ov = [a for a in p["actions"] if a.get("id", "").startswith("ov")]
+    assert [a["label"] for a in ov] == ["Not now", "Try it now"]
+    assert all(a["kind"] == "click" and isinstance(a["node"], int) for a in ov)
+
+
+def test_overlay_button_already_in_actions_is_not_duplicated():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    orig = b.observe
+    b.observe = lambda screenshot=True: {**orig(screenshot=screenshot),
+                                         "actions": [{"id": "e1", "label": "Not now", "kind": "click", "node": 5}]}
+    b.evaluate = lambda expr: [] if "password" in expr else (
+        [{"node": 2000000, "label": "Not now"}] if "aria-modal" in expr else True)
+    p = t.observe()
+    assert [a for a in p["actions"] if a.get("id", "").startswith("ov")] == []
