@@ -159,9 +159,13 @@ def test_default_config_strong_label_without_params_pauses(cfg):
 
 
 def test_default_config_contextual_label_unconfigured_host_is_not_money(cfg):
+    # "Send" on a non-money host is not a money action (no pause). It is now a send action,
+    # so it is hit-tested (verify) and limited to one per run, but money is never attempted.
     t = FakeTarget([page(click("n9", "Send"), url="chat.example/x"), page()])
-    out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9", "DONE"])).run()
-    assert out["status"] == "done" and t.acted == [("n9", None)] and t.verified == []
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n9", "DONE"]))
+    out = r.run()
+    assert out["status"] == "done" and t.acted == [("n9", None)]
+    assert t.verified == ["n9"] and r.money_attempted is False
 
 
 PAY = {"amount": 150000, "recipient": "CR05015202001026284066"}

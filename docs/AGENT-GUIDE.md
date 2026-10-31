@@ -74,6 +74,14 @@ receipts and the final-screen check. If jev-runner can't get past a screen, stop
 (jev-runner already retries a tap that changed nothing with a short press, which is what web-view
 cards in some bank apps need.)
 
+## Message rules (enforced in code)
+
+- **One send per run.** The final send/forward control ("Send", "Enviar") is tapped at most
+  once per run and is never auto-retried, so a forward that returns to a similar-looking screen
+  can't be sent twice. A second send in the same run returns `blocked` / `already_sent`.
+- So: do each message or forward as its own `run_task`. If a send comes back `unverified` or
+  `blocked`, do NOT re-run blindly — `screenshot`, confirm whether it actually went, then decide.
+
 ## Money rules (enforced in code — do not try to bypass)
 
 - For any payment pass `params={"amount": <number>, "recipient": "<IBAN or account>"}` and
@@ -93,7 +101,11 @@ cards in some bank apps need.)
 - Small goals, one screen-level task each, reusing the `session_id`: log in → open transfer →
   fill → confirm → share receipt. Check `screenshot` between them when money is involved.
 - Banking sessions expire fast (BAC: ~8 minutes). Log in and go straight to the transfer.
-- `learn=False` for one-off money runs; save a verified run with `save_as` if it should replay.
+- **Leave learning ON (it is the default).** Money runs are safe to learn: a replayed fill pulls
+  this run's value fresh from `params` (`param:amount`), a stale recorded number is auto-rejected,
+  secrets are never stored (always re-prompted), and every guard (amount+recipient match, the
+  one-money-action limit) runs again on replay. Don't pass `learn=False`. Use `save_as` to name a
+  flow you want to replay by name, and pass `flow=<name>` next time to reuse it.
 - **A modal or promo popover blocks everything** — Jev returns `blocked` because it can't read or
   scroll under an overlay. Even on a read-only tour, allow dismissing it: add "first dismiss any
   popover with Not now / Close / Skip / Dismiss / Got it / the X, then …". Dismissing a promo or

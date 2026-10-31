@@ -5,6 +5,8 @@ from jev_runner.guards import (
     check_money,
     is_money_action,
     is_secret_field,
+    is_send_action,
+    may_retry_tap,
     parse_amount,
     scrub,
 )
@@ -127,6 +129,27 @@ def test_strong_labels_guarded_everywhere_contextual_only_in_context():
         assert is_money_action(click(label), {"url": "bank.app/x"}, {},
                                Config(money_apps=["bank.app"])), label
     assert not is_money_action(click("Enviar código"), anywhere, {"amount": 5}, cfg)
+
+
+def test_is_send_action_detects_send_in_any_context():
+    cfg = Config()
+    click = lambda label: {"kind": "click", "label": label}
+    for label in ["Send", "Enviar", "ENVIAR", "Enviar mensaje"]:
+        assert is_send_action(click(label), cfg), label
+    assert not is_send_action(click("Reply"), cfg)
+    assert not is_send_action({"kind": "fill", "label": "Send"}, cfg)
+    # a label configured as pure navigation is never a send
+    assert not is_send_action(click("Enviar"), Config(navigation_labels=["Enviar"]))
+
+
+def test_send_label_is_never_tap_retried():
+    # may_retry_tap's contract: never re-press a money OR send/confirm label (the old bug was
+    # that send labels weren't excluded, so a duplicate send could be long-pressed in).
+    cfg = Config()
+    click = lambda label: {"kind": "click", "label": label}
+    for label in ["Send", "Enviar", "Transferir"]:
+        assert not may_retry_tap(click(label), cfg), label
+    assert may_retry_tap(click("Siguiente"), cfg)  # a plain nav button may still be retried
 
 
 def test_scrub_respects_digit_boundaries():

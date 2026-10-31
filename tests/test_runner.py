@@ -33,6 +33,24 @@ def test_goal_includes_param_values(cfg):
     assert seen[0].endswith("Values: amount=5, recipient=A / B")
 
 
+def test_send_executes_once_and_second_send_is_blocked(cfg):
+    # A forward returns to a similar-looking screen; a second send in the same run must be
+    # refused, not fired again (this is what triple-sent a WhatsApp forward).
+    t = FakeTarget([page(click("s1", "Enviar")), page(click("s2", "Enviar")), page()])
+    out = Runner("s", t, "forward it", None, cfg,
+                 choose=scripted_choose(["s1", "s2"])).run()
+    assert (out["status"], out["reason"]) == ("blocked", "already_sent")
+    assert t.acted == [("s1", None)]  # only the first send actually ran
+    assert t.verified == ["s1"]       # a send is hit-tested like a money tap
+
+
+def test_single_send_then_done(cfg):
+    t = FakeTarget([page(click("s1", "Send")), page()])
+    out = Runner("s", t, "send it", None, cfg,
+                 choose=scripted_choose(["s1", "DONE"])).run()
+    assert out["status"] == "done" and t.acted == [("s1", None)]
+
+
 def test_no_progress_blocks(cfg):
     t = FakeTarget([page(click("n1", "X"))], stuck_ids={"n1"})
     out = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1"] * 3)).run()

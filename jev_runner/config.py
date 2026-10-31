@@ -59,13 +59,20 @@ class Config:
     # Exact button labels you have checked only open a menu or form and never move money
     # (e.g. a bank's "Transferir o pagar" tab). Whole-label match; never a money action.
     navigation_labels: list[str] = field(default_factory=list)
+    # Labels of a control that transmits a message or forward (the final "send"). Guarded
+    # one-per-run and never tap-retried, so an unchanged-looking screen can't duplicate a send
+    # (a WhatsApp forward returns to a similar screen). Generic verbs only, never app names.
+    send_labels: list[str] = field(default_factory=lambda: [
+        "Send", "Enviar", "Enviar mensaje",
+    ])
     session_ttl_s: int = 900
     reconnect_window_s: int = 30
     data_dir: Path = field(default_factory=data_dir)
 
 
 LIST_FIELDS = ("money_apps", "money_labels", "money_labels_contextual",
-               "money_exclude_words", "secret_patterns", "own_accounts", "navigation_labels")
+               "money_exclude_words", "secret_patterns", "own_accounts", "navigation_labels",
+               "send_labels")
 
 
 def load() -> Config:

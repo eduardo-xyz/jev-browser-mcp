@@ -52,7 +52,20 @@ def may_retry_tap(action: dict, cfg: Config) -> bool:
         return False
     label = normalize(action.get("label") or "")
     return not (_label_matches(label, cfg.money_labels)
-                or _label_matches(label, cfg.money_labels_contextual))
+                or _label_matches(label, cfg.money_labels_contextual)
+                or _label_matches(label, cfg.send_labels))
+
+
+def is_send_action(action: dict, cfg: Config) -> bool:
+    """A tap that transmits a message or forward (the final 'send'). Guarded one-per-run and
+    never tap-retried, so a screen that looks unchanged after sending can't cause a duplicate.
+    A send is a send in any context; a money confirm (checked first) takes precedence."""
+    if action.get("kind") != "click":
+        return False
+    label = normalize(action.get("label") or "")
+    if label in {normalize(x) for x in cfg.navigation_labels}:
+        return False
+    return _label_matches(label, cfg.send_labels)
 
 
 def is_money_action(action: dict, page: dict, money_params: dict, cfg: Config) -> bool:

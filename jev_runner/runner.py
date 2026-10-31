@@ -25,6 +25,7 @@ from .guards import (
     check_money,
     is_money_action,
     is_secret_field,
+    is_send_action,
     may_retry_tap,
     scrub,
     scrub_text,
@@ -116,6 +117,7 @@ class Runner:
         self.last_used = time.time()
         self.executed_money = False  # never reset once True: the receipt must survive
         self.money_attempted = False  # one autonomous money action per run; never reset
+        self.sent_attempted = False  # one message/forward send per run; never reset
         self._money_uncertain = False  # terminal: the session must be ended
         self.receipt: dict | None = None
         self._started = time.perf_counter()
@@ -484,6 +486,13 @@ class Runner:
             self._guard_money(action, page, money_params)
             return
         text = text_for() if action["kind"] == "fill" else None
+        if is_send_action(action, self.cfg):
+            # One send per run, and never the tap-retry path: a forward returns to a
+            # similar-looking screen, so re-pressing an "unchanged" send duplicates it.
+            if self.sent_attempted:
+                raise _Stop("blocked", "already_sent")
+            self._execute(action, page, text, send=True, verify=True)
+            return
         self._execute(action, page, text)
 
     @staticmethod
@@ -516,7 +525,10 @@ class Runner:
         return text
 
     def _execute(self, action: dict, page: dict, text: str | None, *,
-                 verify: bool = False, secret: bool = False, money: bool = False):
+                 verify: bool = False, secret: bool = False, money: bool = False,
+                 send: bool = False):
+        if send:
+            self.sent_attempted = True  # mark before acting: a duplicate must never slip in
         if secret and text:
             self.secrets.append(text)  # before acting, so even a target error is scrubbed
         if money:
@@ -554,8 +566,8 @@ class Runner:
         except StalePage:
             self.page = {}
             return
-        if not money and not self._changed(page, after) and may_retry_tap(action, self.cfg) \
-                and hasattr(self.target, "press"):
+        if not money and not send and not self._changed(page, after) \
+                and may_retry_tap(action, self.cfg) and hasattr(self.target, "press"):
             # Some web views ignore a quick tap; look again, then press and hold briefly once.
             time.sleep(self.settle_delay * 2)
             after = self.page = self.target.observe()
