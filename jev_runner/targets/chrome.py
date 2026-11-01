@@ -309,6 +309,9 @@ class ChromeTarget:
             if debug:
                 _log.info("iframe[%d] %s: w=%s h=%s raw_actions=%d merged=%d",
                           idx, url, snap.get("w"), snap.get("h"), len(raw), merged_count)
+                _log.info("iframe[%d] merged actions: %s", idx,
+                          [(m["id"], m.get("kind"), (m.get("label") or "")[:50])
+                           for m in actions if m.get("frame") == idx])
         if self._frames:
             # The upstream fingerprint only covers the top frame, so a change confined to an iframe
             # would read as "no progress" and stall the run. Fold the iframe actions into it so an
