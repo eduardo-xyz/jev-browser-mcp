@@ -2,11 +2,15 @@
 import base64
 import hashlib
 import json
+import logging
+import os
 import sys
 import time
 from pathlib import Path
 
 from .base import StalePage, TargetBlocked
+
+_log = logging.getLogger("jevd")
 
 LOAD_TIMEOUT = 15.0
 _POLL = 0.25
@@ -261,13 +265,21 @@ class ChromeTarget:
             targets = self._iframe_targets()
         except Exception:
             return  # never let iframe discovery break a normal observe
+        debug = bool(os.environ.get("JEV_DEBUG_IFRAME"))
+        if debug:
+            _log.info("iframe: %d cross-origin target(s) discovered", len(targets))
         for idx, (session_id, url) in enumerate(targets, start=1):
             snap = self._frame_snapshot(session_id)
             if not isinstance(snap, dict):
+                if debug:
+                    _log.info("iframe[%d] %s: snapshot not a dict (%s)", idx, url,
+                              type(snap).__name__)
                 self._detach(session_id)
                 continue
             self._frames[idx] = {"session": session_id, "origin": _origin(url)}
-            for a in snap.get("actions", []):
+            raw = snap.get("actions", [])
+            merged_count = 0
+            for a in raw:
                 if a.get("kind") in ("scroll", "wait") or not isinstance(a.get("node"), int):
                     continue
                 aid = f"f{idx}{a.get('id', '')}"
@@ -281,6 +293,10 @@ class ChromeTarget:
                     if key in a:
                         merged[key] = a[key]
                 actions.append(merged)
+                merged_count += 1
+            if debug:
+                _log.info("iframe[%d] %s: w=%s h=%s raw_actions=%d merged=%d",
+                          idx, url, snap.get("w"), snap.get("h"), len(raw), merged_count)
         if self._frames:
             # The upstream fingerprint only covers the top frame, so a change confined to an iframe
             # would read as "no progress" and stall the run. Fold the iframe actions into it so an
