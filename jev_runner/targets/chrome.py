@@ -443,11 +443,21 @@ class ChromeTarget:
     def _iframe_targets(self) -> list[tuple]:
         """(session_id, url) for each cross-origin iframe target whose origin this page embeds."""
         origins = self._child_origins()
-        if not origins:
+        debug = bool(os.environ.get("JEV_DEBUG_IFRAME"))
+        if not origins and not debug:
             return []
         try:
             targets = _cdp("Target.getTargets").get("targetInfos", [])
         except Exception:
+            if debug:
+                _log.info("iframe discovery: child_origins=%s; Target.getTargets failed",
+                          sorted(origins))
+            return []
+        if debug:
+            _log.info("iframe discovery: child_origins=%s; iframe targets=%s",
+                      sorted(origins),
+                      [i.get("url") for i in targets if i.get("type") == "iframe"])
+        if not origins:
             return []
         out = []
         for info in targets:
