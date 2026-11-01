@@ -113,8 +113,8 @@ def add_lesson(body: str, target: str | None = None, app: str | None = None,
 @mcp.tool()
 def status() -> dict:
     """Show daemon status: `sessions` (each with session_id, target, status and idle_s),
-    `android` (`serial` last reached and whether it is `connected`) and `flows` (count of
-    saved flows)."""
+    `android` (`serial` last reached and whether it is `connected`), `flows` (count of saved
+    flows) and `memory` (counts of learned `lessons` and recorded `runs`, with `done`/`verified`)."""
     return _call("status", {})
 
 

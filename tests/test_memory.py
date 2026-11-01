@@ -67,6 +67,15 @@ def test_import_lessons_md_is_one_time(tmp_path):
     assert any("Quiero" in h["body"] for h in hits)
 
 
+def test_stats_counts(tmp_path):
+    s = store(tmp_path)
+    assert s.stats() == {"lessons": 0, "runs": 0, "done": 0, "verified": 0}
+    s.add_lesson(target="android", goal="g", body="a lesson")
+    s.record_run(target="android", status="done", verified=True)
+    s.record_run(target="android", status="blocked", verified=False)
+    assert s.stats() == {"lessons": 1, "runs": 2, "done": 1, "verified": 1}
+
+
 def test_match_query_is_fts_safe(tmp_path):
     # punctuation / FTS operators in the goal must not raise
     s = store(tmp_path)

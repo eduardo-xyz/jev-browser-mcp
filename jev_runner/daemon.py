@@ -399,13 +399,19 @@ class Daemon:
         android = {"serial": self.link.serial, "connected": self.link.serial is not None}
         if android_error:
             android["error"] = android_error
-        return {
+        out = {
             "sessions": [{"session_id": s.session_id, "target": s.kind, "status": s.status(),
                           "idle_s": round(max(0.0, now - s.idle_since()), 1)}
                          for s in sessions],
             "android": android,
             "flows": len(self.store.list()),
         }
+        if self.memory is not None:
+            try:
+                out["memory"] = self.memory.stats()
+            except Exception:
+                pass
+        return out
 
     def op_list_flows(self) -> dict:
         return {"flows": self.store.list()}

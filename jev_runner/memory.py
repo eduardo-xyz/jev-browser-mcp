@@ -116,5 +116,15 @@ class MemoryStore:
             count += 1
         return count
 
+    def stats(self) -> dict:
+        """Counts for the status tool, so the accumulating learning is visible."""
+        one = lambda sql: self._conn.execute(sql).fetchone()[0]
+        return {
+            "lessons": one("SELECT COUNT(*) FROM lessons"),
+            "runs": one("SELECT COUNT(*) FROM runs"),
+            "done": one("SELECT COUNT(*) FROM runs WHERE status = 'done'"),
+            "verified": one("SELECT COUNT(*) FROM runs WHERE verified = 1"),
+        }
+
     def close(self) -> None:
         self._conn.close()
