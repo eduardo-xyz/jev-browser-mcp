@@ -267,7 +267,8 @@ class ChromeTarget:
             return  # never let iframe discovery break a normal observe
         debug = bool(os.environ.get("JEV_DEBUG_IFRAME"))
         if debug:
-            _log.info("iframe: %d cross-origin target(s) discovered", len(targets))
+            _log.info("iframe: %d cross-origin target(s) discovered; observed url=%s",
+                      len(targets), page.get("url"))
         for idx, (session_id, url) in enumerate(targets, start=1):
             snap = self._frame_snapshot(session_id)
             if not isinstance(snap, dict):
