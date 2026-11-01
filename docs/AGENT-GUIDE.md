@@ -114,11 +114,16 @@ cards in some bank apps need.)
   secrets are never stored (always re-prompted), and every guard (amount+recipient match, the
   one-money-action limit) runs again on replay. Don't pass `learn=False`. Use `save_as` to name a
   flow you want to replay by name, and pass `flow=<name>` next time to reuse it.
-- **Controls inside a cross-origin iframe are now actionable** (e.g. GHL's automation UI): they
-  appear as normal actions and `run_task` can click/fill them — no special syntax. Let the page
-  settle first (as with `read`). A *money* button inside an iframe will **pause for approval**
-  (the amount/recipient check reads the top-frame text, which can't see iframe amounts) — that's
-  the safe default, not a failure. (Experimental; validate with a `screenshot` on important steps.)
+- **Controls inside a cross-origin iframe are actionable** (e.g. GHL's automation UI): they appear
+  as normal actions and `run_task` can click, fill, and scroll them — no special syntax. The runner
+  waits for the iframe to finish mounting on its own (a "wait" now settles until the page stops
+  changing), and scrolling is routed into the iframe, so rows below its fold are reachable. Only the
+  tab whose page is being driven is used, even if other tabs show the same page. Validated end to end
+  on GHL (open a workflow from the list). A *money* button inside an iframe will **pause for approval**
+  (the amount/recipient check reads the top-frame text, which can't see iframe amounts) — that's the
+  safe default, not a failure. Note: a goal that only *navigates* ("open X") can still finish
+  `blocked` even though it worked, because Jev doesn't always recognise the new screen as "done";
+  `screenshot`/`read` to confirm, or phrase the goal around a visible end state.
 - **A modal or promo popover blocks everything** — Jev returns `blocked` because it can't read or
   scroll under an overlay. Even on a read-only tour, allow dismissing it: add "first dismiss any
   popover with Not now / Close / Skip / Dismiss / Got it / the X, then …". Dismissing a promo or
