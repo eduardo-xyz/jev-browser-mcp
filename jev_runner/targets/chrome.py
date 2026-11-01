@@ -281,13 +281,24 @@ class ChromeTarget:
             raw = snap.get("actions", [])
             merged_count = 0
             for a in raw:
-                if a.get("kind") in ("scroll", "wait") or not isinstance(a.get("node"), int):
+                kind = a.get("kind")
+                if kind == "wait":
                     continue
                 aid = f"f{idx}{a.get('id', '')}"
                 if aid in existing:
                     continue
+                if kind == "scroll":
+                    # the real content scrolls inside the iframe, not the top page; offer the
+                    # iframe's own scroll so Jev can reach rows below its fold (act routes it in)
+                    existing.add(aid)
+                    actions.append({"id": aid, "kind": "scroll", "label": a.get("label", ""),
+                                    "delta": a.get("delta", 0), "frame": idx})
+                    merged_count += 1
+                    continue
+                if not isinstance(a.get("node"), int):
+                    continue
                 existing.add(aid)
-                merged = {"id": aid, "node": a["node"], "kind": a.get("kind"),
+                merged = {"id": aid, "node": a["node"], "kind": kind,
                           "label": a.get("label", ""), "role": a.get("role", ""),
                           "value": a.get("value", ""), "frame": idx}
                 for key in ("checked", "selected", "expanded"):
@@ -543,6 +554,20 @@ class ChromeTarget:
         frame = getattr(self, "_frames", {}).get(action.get("frame"))
         if not frame:
             raise StalePage("Frame gone since this decision. Observe again.")
+        if action.get("kind") == "scroll":
+            offset = self._iframe_offset(frame["origin"])
+            if offset is None:
+                raise StalePage("Iframe moved since this decision. Observe again.")
+            x, y = offset["x"] + offset["w"] / 2, offset["y"] + offset["h"] / 2  # wheel over the iframe
+            if os.environ.get("JEV_DEBUG_IFRAME"):
+                _log.info("iframe act: kind=scroll delta=%s iframe_offset=%s -> top xy=(%.1f,%.1f)",
+                          action.get("delta"), offset, x, y)
+            try:
+                self.browser.call("Input.dispatchMouseEvent", type="mouseWheel", x=x, y=y,
+                                  deltaX=0, deltaY=action.get("delta", 0))
+            except Exception as exc:
+                raise RuntimeError(f"action_uncertain: {exc}") from exc
+            return
         center = self._resolve_in_frame(frame["session"], action["node"])
         if center is None:
             raise StalePage("Target changed or is covered. Observe again.")

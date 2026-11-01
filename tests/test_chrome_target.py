@@ -395,13 +395,17 @@ def test_observe_merges_iframe_actions_tagged_with_frame(monkeypatch):
     monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
     monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
         {"id": "e1", "node": 5, "kind": "click", "label": "Create workflow", "role": "button", "value": ""},
-        {"id": "scroll_down", "kind": "scroll", "label": "Scroll down"}]})
+        {"id": "scroll_down", "kind": "scroll", "label": "Scroll down", "delta": 560},
+        {"id": "wait", "kind": "wait", "label": "Wait for the page to update"}]})
     page = t.observe()
     frame_actions = [a for a in page["actions"] if a.get("frame")]
-    assert len(frame_actions) == 1
-    a = frame_actions[0]
-    assert a == {"id": "f1e1", "node": 5, "kind": "click", "label": "Create workflow",
-                 "role": "button", "value": "", "frame": 1}
+    assert {a["id"] for a in frame_actions} == {"f1e1", "f1scroll_down"}  # click + scroll, not wait
+    click = next(a for a in frame_actions if a["id"] == "f1e1")
+    assert click == {"id": "f1e1", "node": 5, "kind": "click", "label": "Create workflow",
+                     "role": "button", "value": "", "frame": 1}
+    scroll = next(a for a in frame_actions if a["id"] == "f1scroll_down")
+    assert scroll == {"id": "f1scroll_down", "kind": "scroll", "label": "Scroll down",
+                      "delta": 560, "frame": 1}
     assert t._frames[1] == {"session": "S1", "origin": "https://content.other"}
     # iframe actions are folded into the fingerprint so an iframe change counts as progress
     assert isinstance(page.get("fingerprint"), str) and page["fingerprint"]
@@ -448,6 +452,20 @@ def test_act_iframe_fill_selects_all_then_inserts(monkeypatch):
     assert methods == ["Input.dispatchMouseEvent", "Input.dispatchMouseEvent",
                        "Input.dispatchKeyEvent", "Input.dispatchKeyEvent", "Input.insertText"]
     assert b.calls[-1][1]["text"] == "hello"
+
+
+def test_act_iframe_scroll_routes_mousewheel_into_frame(monkeypatch):
+    # a scroll inside the iframe becomes a mouseWheel over the iframe's centre (top-viewport coords)
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    t._frames = {1: {"session": "S1", "origin": "https://content.other"}}
+    monkeypatch.setattr(t, "_iframe_offset", lambda origin: {"x": 100, "y": 50, "w": 800, "h": 600})
+    t.act({"id": "f1scroll_down", "kind": "scroll", "delta": 560, "frame": 1}, {})
+    wheels = [p for m, p in b.calls if m == "Input.dispatchMouseEvent"]
+    assert len(wheels) == 1
+    assert wheels[0] == {"type": "mouseWheel", "x": 500, "y": 350, "deltaX": 0, "deltaY": 560}
+    assert b.acts == []  # never uses the upstream act path
 
 
 def test_act_iframe_stale_before_dispatch_raises_stalepage(monkeypatch):
