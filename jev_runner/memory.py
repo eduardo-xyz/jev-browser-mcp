@@ -6,6 +6,7 @@ secret or obvious account/PII digit run is ever stored (ingest scrubs on the way
 """
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -45,33 +46,39 @@ class MemoryStore:
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.path))
+        # The daemon opens the store on the main thread but records runs from each session's worker
+        # thread, so the connection must be usable across threads; serialise every use with a lock.
+        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        self._lock = threading.RLock()  # reentrant: import_lessons_md holds it and calls add_lesson
+        with self._lock:
+            self._conn.executescript(_SCHEMA)
+            self._conn.commit()
 
     def record_run(self, *, target, app=None, goal="", status="", reason=None, verified=None,
                    steps=0, duration_ms=0, loop_events=0, flow_used=None, flow_saved=None) -> None:
-        self._conn.execute(
-            "INSERT INTO runs (ts, target, app, goal, status, reason, verified, steps, "
-            "duration_ms, loop_events, flow_used, flow_saved) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (time.time(), target, app, scrub_pii(goal), status, reason,
-             None if verified is None else int(verified), steps, duration_ms, loop_events,
-             flow_used, flow_saved))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO runs (ts, target, app, goal, status, reason, verified, steps, "
+                "duration_ms, loop_events, flow_used, flow_saved) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (time.time(), target, app, scrub_pii(goal), status, reason,
+                 None if verified is None else int(verified), steps, duration_ms, loop_events,
+                 flow_used, flow_saved))
+            self._conn.commit()
 
     def add_lesson(self, *, target=None, app=None, goal="", body="", screen_tags="",
                    source="auto") -> int:
         body, goal, screen_tags = scrub_pii(body), scrub_pii(goal), scrub_pii(screen_tags)
-        cur = self._conn.execute(
-            "INSERT INTO lessons (created_at, target, app, goal_text, screen_tags, body, source) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (time.time(), target, app, goal, screen_tags, body, source))
-        self._conn.execute(
-            "INSERT INTO lessons_fts (rowid, body, goal_text, screen_tags) VALUES (?,?,?,?)",
-            (cur.lastrowid, body, goal, screen_tags))
-        self._conn.commit()
-        return cur.lastrowid
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO lessons (created_at, target, app, goal_text, screen_tags, body, source) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (time.time(), target, app, goal, screen_tags, body, source))
+            self._conn.execute(
+                "INSERT INTO lessons_fts (rowid, body, goal_text, screen_tags) VALUES (?,?,?,?)",
+                (cur.lastrowid, body, goal, screen_tags))
+            self._conn.commit()
+            return cur.lastrowid
 
     def query_lessons(self, *, target=None, app=None, goal="", screen_tags="", k=5) -> list[dict]:
         """Top-k lessons relevant to this goal+screen, scoped by target/app, best match first."""
@@ -84,18 +91,19 @@ class MemoryStore:
             params.append(app)
         where = (" AND " + " AND ".join(filters)) if filters else ""
         match = _match_query(f"{goal} {screen_tags}")
-        if match:
+        with self._lock:
+            if match:
+                rows = self._conn.execute(
+                    "SELECT l.* FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid "
+                    f"WHERE lessons_fts MATCH ?{where} ORDER BY bm25(lessons_fts) LIMIT ?",
+                    [match, *params, k]).fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            where2 = (" WHERE " + " AND ".join(filters)) if filters else ""
             rows = self._conn.execute(
-                "SELECT l.* FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid "
-                f"WHERE lessons_fts MATCH ?{where} ORDER BY bm25(lessons_fts) LIMIT ?",
-                [match, *params, k]).fetchall()
-            if rows:
-                return [dict(r) for r in rows]
-        where2 = (" WHERE " + " AND ".join(filters)) if filters else ""
-        rows = self._conn.execute(
-            f"SELECT l.* FROM lessons l{where2} ORDER BY l.created_at DESC LIMIT ?",
-            [*params, k]).fetchall()
-        return [dict(r) for r in rows]
+                f"SELECT l.* FROM lessons l{where2} ORDER BY l.created_at DESC LIMIT ?",
+                [*params, k]).fetchall()
+            return [dict(r) for r in rows]
 
     def import_lessons_md(self, path, target=None) -> int:
         """One-time import of a freeform lessons.md into retrievable lessons (one per H2 section).
@@ -103,9 +111,10 @@ class MemoryStore:
         path = Path(path)
         if not path.exists():
             return 0
-        if self._conn.execute(
-                "SELECT COUNT(*) FROM lessons WHERE source = 'lessons.md'").fetchone()[0]:
-            return 0  # already imported
+        with self._lock:
+            if self._conn.execute(
+                    "SELECT COUNT(*) FROM lessons WHERE source = 'lessons.md'").fetchone()[0]:
+                return 0  # already imported
         count = 0
         # [1:] drops the preamble before the first H2 (not a lesson); each remaining chunk is a section
         for part in re.split(r"(?m)^##\s+", path.read_text(errors="replace"))[1:]:
@@ -119,12 +128,13 @@ class MemoryStore:
     def stats(self) -> dict:
         """Counts for the status tool, so the accumulating learning is visible."""
         one = lambda sql: self._conn.execute(sql).fetchone()[0]
-        return {
-            "lessons": one("SELECT COUNT(*) FROM lessons"),
-            "runs": one("SELECT COUNT(*) FROM runs"),
-            "done": one("SELECT COUNT(*) FROM runs WHERE status = 'done'"),
-            "verified": one("SELECT COUNT(*) FROM runs WHERE verified = 1"),
-        }
+        with self._lock:
+            return {
+                "lessons": one("SELECT COUNT(*) FROM lessons"),
+                "runs": one("SELECT COUNT(*) FROM runs"),
+                "done": one("SELECT COUNT(*) FROM runs WHERE status = 'done'"),
+                "verified": one("SELECT COUNT(*) FROM runs WHERE verified = 1"),
+            }
 
     def close(self) -> None:
         self._conn.close()

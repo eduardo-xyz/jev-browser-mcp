@@ -1,3 +1,5 @@
+import threading
+
 from jev_runner.memory import MemoryStore, scrub_pii
 
 
@@ -74,6 +76,27 @@ def test_stats_counts(tmp_path):
     s.record_run(target="android", status="done", verified=True)
     s.record_run(target="android", status="blocked", verified=False)
     assert s.stats() == {"lessons": 1, "runs": 2, "done": 1, "verified": 1}
+
+
+def test_record_run_from_another_thread(tmp_path):
+    # The daemon opens the store on its main thread but records runs from each session's worker
+    # thread; a plain sqlite connection would raise ProgrammingError across threads.
+    s = store(tmp_path)
+    err = []
+
+    def worker():
+        try:
+            s.record_run(target="chrome", status="done", verified=True)
+            s.add_lesson(target="chrome", goal="g", body="a lesson from a worker thread")
+            s.stats()
+        except Exception as exc:  # pragma: no cover - only on regression
+            err.append(exc)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert not err, f"cross-thread store use raised: {err}"
+    assert s.stats()["runs"] == 1 and s.stats()["lessons"] == 1
 
 
 def test_match_query_is_fts_safe(tmp_path):
