@@ -1,5 +1,7 @@
 """Runner: per tick observe -> scrub -> decide -> act -> record."""
 import hashlib
+import logging
+import os
 import re
 import time
 
@@ -32,6 +34,8 @@ from .guards import (
     scrub_value,
 )
 from .targets.base import DeviceDisconnected, StalePage, Target, TargetBlocked
+
+_log = logging.getLogger("jevd")
 
 UNREADABLE_TRIES = 3
 NO_PROGRESS = 3
@@ -400,7 +404,14 @@ class Runner:
 
     def _decide(self, view: dict) -> dict:
         self.model_calls += 1
-        return self._choose(view, self.goal, self.history)
+        decision = self._choose(view, self.goal, self.history)
+        if os.environ.get("JEV_DEBUG_IFRAME"):
+            probs = decision.get("probabilities", {}) or {}
+            top = dict(sorted(probs.items(), key=lambda kv: -kv[1])[:4])
+            _log.info("decide: op=%s choice=%s target=%s top_probs=%s",
+                      decision.get("operation"), decision.get("choice"),
+                      decision.get("target"), top)
+        return decision
 
     # --- replay: recorded steps stand in for `choose`; every guard still applies ---
     def _match_flow(self, page: dict) -> tuple[int, dict, dict] | None:

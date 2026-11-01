@@ -401,7 +401,10 @@ def test_observe_merges_iframe_actions_tagged_with_frame(monkeypatch):
     frame_actions = [a for a in page["actions"] if a.get("frame")]
     assert {a["id"] for a in frame_actions} == {"f1e1", "f1scroll_down"}  # click + scroll, not wait
     click = next(a for a in frame_actions if a["id"] == "f1e1")
-    assert click == {"id": "f1e1", "node": 5, "kind": "click", "label": "Create workflow",
+    # node is made globally unique (frame base * idx + real) so it can't collide with top-frame
+    # node ids in the model's per-node dedup; frame_node keeps the real in-frame id for act()
+    assert click == {"id": "f1e1", "node": chrome_mod._FRAME_NODE_BASE + 5, "frame_node": 5,
+                     "kind": "click", "label": "Create workflow",
                      "role": "button", "value": "", "frame": 1}
     scroll = next(a for a in frame_actions if a["id"] == "f1scroll_down")
     assert scroll == {"id": "f1scroll_down", "kind": "scroll", "label": "Scroll down",
@@ -409,6 +412,39 @@ def test_observe_merges_iframe_actions_tagged_with_frame(monkeypatch):
     assert t._frames[1] == {"session": "S1", "origin": "https://content.other"}
     # iframe actions are folded into the fingerprint so an iframe change counts as progress
     assert isinstance(page.get("fingerprint"), str) and page["fingerprint"]
+
+
+def test_merged_iframe_node_does_not_collide_with_top_frame(monkeypatch):
+    # a top-frame node and an iframe node can both be the small int 5; the merge must make them
+    # distinct so the model's per-node element dedup doesn't collapse two different elements.
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: []
+    orig = b.observe
+    b.observe = lambda screenshot=True: {**orig(screenshot=screenshot),
+        "actions": [{"id": "e5", "node": 5, "kind": "click", "label": "Top item"}]}
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
+        {"id": "e5", "node": 5, "kind": "click", "label": "Iframe row"}]})
+    page = t.observe()
+    nodes = [a["node"] for a in page["actions"]]
+    assert len(nodes) == len(set(nodes))  # no collision between top node 5 and iframe node 5
+    iframe_a = next(a for a in page["actions"] if a.get("frame"))
+    assert iframe_a["node"] != 5 and iframe_a["frame_node"] == 5
+
+
+def test_act_iframe_resolves_against_frame_node(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    t._frames = {1: {"session": "S1", "origin": "https://content.other"}}
+    seen = []
+    monkeypatch.setattr(t, "_resolve_in_frame",
+                        lambda sid, node: seen.append(node) or {"x": 1, "y": 1})
+    monkeypatch.setattr(t, "_iframe_offset", lambda origin: {"x": 0, "y": 0, "w": 1, "h": 1})
+    t.act({"id": "f1e5", "node": chrome_mod._FRAME_NODE_BASE + 5, "frame_node": 5,
+           "kind": "click", "frame": 1}, {})
+    assert seen == [5]  # resolved against the real in-frame node, not the unique model node
 
 
 def test_observe_iframe_change_changes_fingerprint(monkeypatch):

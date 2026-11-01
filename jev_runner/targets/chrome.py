@@ -19,6 +19,11 @@ _LOADED_JS = (
     "!!document.body && document.body.innerText.trim().length > 0"
 )
 
+# Iframe node ids come from the frame's own __jevFast registry (small ints) and collide with the top
+# frame's ids. The model's action_space dedups elements by node, so a merged iframe node must be made
+# globally unique; the real in-frame node is kept as `frame_node` for act() to resolve against.
+_FRAME_NODE_BASE = 10_000_000
+
 _monotonic = time.monotonic
 _sleep = time.sleep
 
@@ -298,7 +303,9 @@ class ChromeTarget:
                 if not isinstance(a.get("node"), int):
                     continue
                 existing.add(aid)
-                merged = {"id": aid, "node": a["node"], "kind": kind,
+                # unique node for the model's per-node dedup; frame_node is the real in-frame id
+                merged = {"id": aid, "node": _FRAME_NODE_BASE * idx + a["node"],
+                          "frame_node": a["node"], "kind": kind,
                           "label": a.get("label", ""), "role": a.get("role", ""),
                           "value": a.get("value", ""), "frame": idx}
                 for key in ("checked", "selected", "expanded"):
@@ -571,7 +578,7 @@ class ChromeTarget:
             except Exception as exc:
                 raise RuntimeError(f"action_uncertain: {exc}") from exc
             return
-        center = self._resolve_in_frame(frame["session"], action["node"])
+        center = self._resolve_in_frame(frame["session"], action.get("frame_node", action["node"]))
         if center is None:
             raise StalePage("Target changed or is covered. Observe again.")
         offset = self._iframe_offset(frame["origin"])
