@@ -525,6 +525,9 @@ class ChromeTarget:
         if offset is None:
             raise StalePage("Iframe moved since this decision. Observe again.")
         x, y = offset["x"] + center["x"], offset["y"] + center["y"]
+        if os.environ.get("JEV_DEBUG_IFRAME"):
+            _log.info("iframe act: kind=%s label=%r center=%s iframe_offset=%s -> top xy=(%.1f,%.1f)",
+                      action.get("kind"), action.get("label"), center, offset, x, y)
         try:
             self._dispatch(action, x, y, text)
         except Exception as exc:  # input may already be in flight: never a retryable StalePage
