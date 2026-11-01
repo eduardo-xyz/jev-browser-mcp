@@ -24,3 +24,10 @@ def _verify_ok(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_settle_delay(monkeypatch):
     monkeypatch.setattr("jev_runner.runner.Runner.settle_delay", 0)
+
+
+@pytest.fixture(autouse=True)
+def _no_wait_settle(monkeypatch):
+    # the post-wait settle spends real wall-clock letting late content appear; off by default in
+    # tests (a test that exercises it re-sets WAIT_SETTLE/WAIT_POLL to small values itself)
+    monkeypatch.setattr("jev_runner.runner.WAIT_SETTLE", 0)

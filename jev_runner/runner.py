@@ -36,6 +36,9 @@ from .targets.base import DeviceDisconnected, StalePage, Target, TargetBlocked
 UNREADABLE_TRIES = 3
 NO_PROGRESS = 3
 MAX_WAITS = 3  # a churny SPA never looks "settled"; after this many waits, force a real decision
+WAIT_SETTLE = 8.0  # seconds a chosen "wait" may spend letting late async content appear (a SPA that
+#                    mounts a cross-origin iframe seconds after load); upstream's wait sleeps 0.1s
+WAIT_POLL = 0.5    # poll interval while settling; returns as soon as the screen changes
 LOOP_DROP = 2   # after the same action is taken this many times on one screen, drop it from the
 #                 next view so Jev is forced to try something else (auto-recover from a cycle).
 LOOP_LIMIT = 3  # hard backstop: same action on the same screen this many times = a cycle (e.g. open
@@ -335,6 +338,21 @@ class Runner:
                 break
         return n
 
+    def _settle_after_wait(self, page: dict) -> None:
+        """A 'wait' choice means the screen reported itself unsettled. Upstream's wait sleeps only
+        0.1s, too short for a page that mounts content seconds after its initial load (e.g. a SPA
+        that injects a cross-origin iframe once the shell has rendered). Spend a bounded window,
+        returning as soon as the screen changes, so the next observe sees the new controls instead
+        of the run giving up after MAX_WAITS consecutive waits."""
+        deadline = time.monotonic() + WAIT_SETTLE
+        while time.monotonic() < deadline:
+            time.sleep(WAIT_POLL)
+            try:
+                if self.target.observe().get("fingerprint") != page.get("fingerprint"):
+                    return
+            except StalePage:
+                return
+
     def _no_progress(self) -> bool:
         last = self.history[-NO_PROGRESS:]
         return len(last) == NO_PROGRESS and all(
@@ -626,6 +644,8 @@ class Runner:
             self._secret_fields.update(self._field_keys(action))
         entry["value_source"] = value_source(text, self.params, secret=entry["text"] == "•••")
         self.history.append(entry)
+        if action.get("kind") == "wait":
+            self._settle_after_wait(page)  # let late async content (e.g. a mounting iframe) appear
         try:
             self.page = after = self.target.observe()
         except StalePage:

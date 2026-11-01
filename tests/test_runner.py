@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 
@@ -292,6 +293,49 @@ def test_no_press_retry_for_send_confirm_or_checkbox(cfg):
         t = _PressTarget([page(act), page()], deaf={"n0"})
         Runner("s", t, "g", None, cfg, choose=scripted_choose(["n0", "DONE"]), learn=False).run()
         assert t.pressed == [], act["label"]
+
+
+def test_wait_settles_for_late_mounting_content(cfg, monkeypatch):
+    # A SPA mounts a control (e.g. a cross-origin iframe's rows) seconds after the shell loads.
+    # Upstream's wait sleeps only 0.1s, so three quick waits give up before it appears. The post-
+    # wait settle must spend bounded wall-clock, so the late control is seen and acted on.
+    monkeypatch.setattr(runner_mod, "WAIT_SETTLE", 2.0)
+    monkeypatch.setattr(runner_mod, "WAIT_POLL", 0.02)
+    shell = page()
+    shell["actions"].append({"id": "w", "kind": "wait", "label": "Wait for the page to update"})
+    ready = page(click("n1", "Stop AI when task is made"))
+
+    class LateTarget:
+        kind = "chrome"
+
+        def __init__(self, ready_at):
+            self.ready_at = ready_at
+            self.acted = []
+
+        def observe(self):
+            return ready if time.monotonic() >= self.ready_at else shell
+
+        def fresh(self, page):
+            return False
+
+        def act(self, action, page, text=None, verify=False):
+            self.acted.append(action["id"])
+
+        def close(self):
+            pass
+
+    t = LateTarget(ready_at=time.monotonic() + 0.4)
+
+    def choose(view, goal, history):
+        if any(h.get("kind") == "click" for h in history):
+            return {"choice": "DONE"}
+        kinds = [a["kind"] for a in view["actions"]]
+        return {"choice": "n1"} if "click" in kinds else {"choice": "w"}
+
+    r = Runner("s", t, "g", None, cfg, choose=choose, learn=False, verify=lambda g, p, h: (True, ""))
+    out = r.run()
+    assert out["status"] == "done"
+    assert "n1" in t.acted  # acted on the late-mounted control instead of blocking on waits
 
 
 def test_wait_action_dropped_after_cap_forces_decision(cfg):
