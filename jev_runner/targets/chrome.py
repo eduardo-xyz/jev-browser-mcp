@@ -441,29 +441,54 @@ class ChromeTarget:
             return set()
         return {o for o in origins if isinstance(o, str)} if isinstance(origins, list) else set()
 
+    def _observed_frame_ids(self) -> set[str]:
+        """frameIds of the observed tab's own <iframe> elements. The parent knows a child frame's id
+        even when the child runs out-of-process, and an OOPIF target's targetId equals its frameId,
+        so this lets us pick THIS tab's iframe targets out of the global target list — otherwise a
+        different tab showing the same page is merged too, and its actions can't be routed here."""
+        try:
+            root = self.browser.call("DOM.getDocument", depth=0)["root"]["nodeId"]
+            node_ids = self.browser.call(
+                "DOM.querySelectorAll", nodeId=root, selector="iframe")["nodeIds"]
+        except Exception:
+            return set()
+        ids = set()
+        for nid in node_ids:
+            try:
+                fid = self.browser.call("DOM.describeNode", nodeId=nid).get("node", {}).get("frameId")
+            except Exception:
+                continue
+            if fid:
+                ids.add(fid)
+        return ids
+
     def _iframe_targets(self) -> list[tuple]:
-        """(session_id, url) for each cross-origin iframe target whose origin this page embeds."""
+        """(session_id, url) for each cross-origin iframe target that belongs to THIS tab. Prefer a
+        precise match by frameId (an OOPIF's targetId == its frameId), falling back to origin match
+        when the frameId lookup is unavailable, so the single-tab path is never worse than before."""
         origins = self._child_origins()
+        frame_ids = self._observed_frame_ids()
         debug = bool(os.environ.get("JEV_DEBUG_IFRAME"))
-        if not origins and not debug:
+        if not origins and not frame_ids and not debug:
             return []
         try:
             targets = _cdp("Target.getTargets").get("targetInfos", [])
         except Exception:
             if debug:
-                _log.info("iframe discovery: child_origins=%s; Target.getTargets failed",
-                          sorted(origins))
+                _log.info("iframe discovery: child_origins=%s frame_ids=%s; Target.getTargets failed",
+                          sorted(origins), sorted(frame_ids))
             return []
+        iframes = [i for i in targets if i.get("type") == "iframe"]
+        by_frame = [i for i in iframes if i.get("targetId") in frame_ids]
+        by_origin = [i for i in iframes if _origin(i.get("url") or "") in origins]
+        chosen = by_frame or by_origin  # tab-scoped when we can, else origin (prior behavior)
         if debug:
-            _log.info("iframe discovery: child_origins=%s; iframe targets=%s",
-                      sorted(origins),
-                      [i.get("url") for i in targets if i.get("type") == "iframe"])
-        if not origins:
-            return []
+            _log.info("iframe discovery: child_origins=%s frame_ids=%s; iframe targets=%s; matched=%s",
+                      sorted(origins), sorted(frame_ids),
+                      [(i.get("targetId"), i.get("url")) for i in iframes],
+                      "by_frame" if by_frame else ("by_origin" if by_origin else "none"))
         out = []
-        for info in targets:
-            if info.get("type") != "iframe" or _origin(info.get("url") or "") not in origins:
-                continue
+        for info in chosen:
             try:
                 session_id = _cdp("Target.attachToTarget",
                                   targetId=info["targetId"], flatten=True)["sessionId"]

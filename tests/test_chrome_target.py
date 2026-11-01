@@ -279,6 +279,67 @@ def test_read_dedupes_identical_iframes_from_two_tabs(monkeypatch):
     assert len(out["frames"]) == 1 and out["text"].count("Same workflows") == 1
 
 
+def test_iframe_targets_scopes_to_observed_tab_by_frame_id(monkeypatch):
+    # Two tabs show the same page -> two same-origin iframe targets. frameId (== OOPIF targetId)
+    # picks only the observed tab's own iframe, so the other tab's actions aren't merged/misrouted.
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: (["https://content.other"] if "new URL(f.src" in expr else True)
+
+    def fake_call(method, **params):
+        if method == "DOM.getDocument":
+            return {"root": {"nodeId": 1}}
+        if method == "DOM.querySelectorAll":
+            return {"nodeIds": [2]}
+        if method == "DOM.describeNode":
+            return {"node": {"frameId": "FID1"}}
+        return {}
+
+    b.call = fake_call
+    attached = []
+
+    def fake_cdp(method, **kw):
+        if method == "Target.getTargets":
+            return {"targetInfos": [
+                {"type": "iframe", "url": "https://content.other/app", "targetId": "FID1"},
+                {"type": "iframe", "url": "https://content.other/app", "targetId": "FID2"}]}
+        if method == "Target.attachToTarget":
+            attached.append(kw["targetId"])
+            return {"sessionId": "S-" + kw["targetId"]}
+        return {}
+
+    monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
+    out = t._iframe_targets()
+    assert attached == ["FID1"]  # only the observed tab's own iframe
+    assert [u for _, u in out] == ["https://content.other/app"]
+
+
+def test_iframe_targets_falls_back_to_origin_without_frame_ids(monkeypatch):
+    # When the frameId lookup is unavailable (DOM calls return nothing), origin match still works.
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: (["https://content.other"] if "new URL(f.src" in expr else True)
+    # b.call returns {} for DOM.* -> _observed_frame_ids() yields empty set
+    attached = []
+
+    def fake_cdp(method, **kw):
+        if method == "Target.getTargets":
+            return {"targetInfos": [
+                {"type": "iframe", "url": "https://content.other/app", "targetId": "IF"},
+                {"type": "iframe", "url": "https://ads.unrelated/x", "targetId": "AD"}]}
+        if method == "Target.attachToTarget":
+            attached.append(kw["targetId"])
+            return {"sessionId": "S"}
+        return {}
+
+    monkeypatch.setattr(chrome_mod, "_cdp", fake_cdp)
+    out = t._iframe_targets()
+    assert attached == ["IF"]  # origin match only; unrelated ad iframe skipped
+    assert [u for _, u in out] == ["https://content.other/app"]
+
+
 def test_read_without_iframes_returns_top_only(monkeypatch):
     f = FakeBrowserFactory(loaded=[True])
     t = ChromeTarget("https://app.example/x", browser_factory=f)
