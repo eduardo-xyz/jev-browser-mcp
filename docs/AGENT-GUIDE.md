@@ -47,10 +47,12 @@ jev-runner tags each Chrome tab it opens with AI Broker so the **AI Broker Tab G
 it in a named, coloured group — the same mechanism `relay.mjs` uses for chrome-devtools-mcp. It's
 best-effort and off unless three things are present, and a failure never affects a run:
 
-1. `BU_NAME` set on the jevd launch (the group is `JEV <BU_NAME>`, e.g. `JEV da`), and a broker profile
-   token at `~/Projects/Personal/AI-Broker/.broker/cli/claude-<BU_NAME>-cli.token` (override the dir
-   with `JEV_BROKER_TOKEN_DIR`; broker URL defaults to `http://127.0.0.1:18765`, override with
-   `JEV_BROKER_URL`).
+1. `BU_NAME` set on the jevd launch, and a broker profile token at
+   `~/Projects/Personal/AI-Broker/.broker/cli/claude-<BU_NAME>-cli.token` (override the dir with
+   `JEV_BROKER_TOKEN_DIR`; broker URL defaults to `http://127.0.0.1:18765`, override with
+   `JEV_BROKER_URL`). The group label defaults to `JEV <BU_NAME>`; set **`JEV_GROUP_NAME`** to show the
+   session's own name instead (e.g. `JEV_GROUP_NAME=Turbo`) — `BU_NAME` stays the token key, so it
+   can't double as the label. Chrome renders group titles in uppercase; that's display-only.
 2. The broker running, and the **AI Broker Tab Groups** extension loaded in the Chrome that jevd
    drives (`BU_CDP_URL`).
 3. The group **colour** is derived from the name; pin a specific one in

@@ -30,6 +30,14 @@ def test_group_name_from_bu_name(monkeypatch):
     assert tab_groups.group_name() == "JEV daweird"
 
 
+def test_group_name_override_shows_session_name(monkeypatch):
+    monkeypatch.setenv("BU_NAME", "da")  # stays the token key
+    monkeypatch.setenv("JEV_GROUP_NAME", "Turbo")  # label only
+    assert tab_groups.group_name() == "Turbo"
+    monkeypatch.setenv("JEV_GROUP_NAME", "Jev-r (pe)")
+    assert tab_groups.group_name() == "Jev-r (pe)".replace("(", "").replace(")", "")  # sanitised
+
+
 def test_claim_posts_expected_rpc(tmp_path, monkeypatch):
     _write_token(tmp_path, "da", "secret-tok")
     monkeypatch.setenv("JEV_BROKER_TOKEN_DIR", str(tmp_path / "cli"))

@@ -31,6 +31,7 @@ def _no_tab_groups(tmp_path, monkeypatch):
     # point the broker-token dir at an empty temp dir so tab_groups is a no-op (never hits the network)
     monkeypatch.setenv("JEV_BROKER_TOKEN_DIR", str(tmp_path / "no-broker"))
     monkeypatch.delenv("BU_NAME", raising=False)
+    monkeypatch.delenv("JEV_GROUP_NAME", raising=False)
 
 
 @pytest.fixture(autouse=True)

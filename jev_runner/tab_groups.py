@@ -42,8 +42,11 @@ def _bu_name() -> str:
 
 
 def group_name() -> str:
-    """The group label for this instance, e.g. 'JEV da'. The extension derives the colour from it."""
-    return _NAME_OK.sub("", f"JEV {_bu_name()}".strip())[:40]
+    """The tab-group label. Defaults to 'JEV <BU_NAME>'; set JEV_GROUP_NAME to show the session's own
+    name instead (BU_NAME stays the token-lookup key, so it can't double as the label). Chrome renders
+    group titles in uppercase — that's display-only. The extension derives the colour from this name."""
+    raw = (os.environ.get("JEV_GROUP_NAME") or f"JEV {_bu_name()}").strip()
+    return _NAME_OK.sub("", raw)[:40] or "JEV"
 
 
 def _token() -> str:
