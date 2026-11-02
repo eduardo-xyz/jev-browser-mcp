@@ -27,6 +27,13 @@ def _no_settle_delay(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_tab_groups(tmp_path, monkeypatch):
+    # point the broker-token dir at an empty temp dir so tab_groups is a no-op (never hits the network)
+    monkeypatch.setenv("JEV_BROKER_TOKEN_DIR", str(tmp_path / "no-broker"))
+    monkeypatch.delenv("BU_NAME", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_wait_settle(monkeypatch):
     # the post-wait settle spends real wall-clock letting late content appear; off by default in
     # tests (a test that exercises it re-sets WAIT_SETTLE/WAIT_POLL to small values itself)

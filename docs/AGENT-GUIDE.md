@@ -41,6 +41,25 @@ BU_CDP_URL=http://127.0.0.1:9333 BU_NAME=<label> JEV_DATA_DIR=~/.local/share/jev
 Each data dir gets its own socket automatically, so instances stay isolated (a long `JEV_DATA_DIR` is
 fine now — the socket is relocated to a short path when needed).
 
+### Identifying jev-runner's tabs (named + coloured tab groups)
+
+jev-runner tags each Chrome tab it opens with AI Broker so the **AI Broker Tab Groups** extension puts
+it in a named, coloured group — the same mechanism `relay.mjs` uses for chrome-devtools-mcp. It's
+best-effort and off unless three things are present, and a failure never affects a run:
+
+1. `BU_NAME` set on the jevd launch (the group is `JEV <BU_NAME>`, e.g. `JEV da`), and a broker profile
+   token at `~/Projects/Personal/AI-Broker/.broker/cli/claude-<BU_NAME>-cli.token` (override the dir
+   with `JEV_BROKER_TOKEN_DIR`; broker URL defaults to `http://127.0.0.1:18765`, override with
+   `JEV_BROKER_URL`).
+2. The broker running, and the **AI Broker Tab Groups** extension loaded in the Chrome that jevd
+   drives (`BU_CDP_URL`).
+3. The group **colour** is derived from the name; pin a specific one in
+   `.broker/cli/browser-groups.json` under `colors` (e.g. `{"JEV da": "orange"}`) — that's Eduardo's
+   file, not jevd's.
+
+jevd claims each tab on creation and sends a keep-alive while a session is active, so the broker's
+idle sweep (10 min) won't close an in-use tab. With no token/`BU_NAME` it is a silent no-op.
+
 ## Tools
 
 | Tool | Use |

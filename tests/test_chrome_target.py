@@ -17,6 +17,7 @@ StalePage_.__name__ = "StalePage"
 class FakeBrowser:
     def __init__(self, factory):
         self.f = factory
+        self.target = "FAKE-TARGET"
         self.closed = False
         self.acts = []
         self.fresh_result = True
@@ -113,6 +114,38 @@ def test_first_load_ok_no_renavigate():
 def make():
     f = FakeBrowserFactory(loaded=[True])
     return ChromeTarget("https://x.test", browser_factory=f), f.browsers[0]
+
+
+def test_construction_claims_tab_with_broker(monkeypatch):
+    claimed = []
+    monkeypatch.setattr(chrome_mod.tab_groups, "claim", lambda t: claimed.append(t))
+    f = FakeBrowserFactory(loaded=[True])
+    ChromeTarget("https://x.test", browser_factory=f)
+    assert claimed == ["FAKE-TARGET"]  # the created target is registered with the broker
+
+
+def test_observe_pings_activity_when_grouping(monkeypatch):
+    monkeypatch.setattr(chrome_mod.tab_groups, "enabled", lambda: True)
+    monkeypatch.setattr(chrome_mod.tab_groups, "claim", lambda t: None)
+    pings = []
+    monkeypatch.setattr(chrome_mod.tab_groups, "activity", lambda ids: pings.append(ids))
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    assert t._grouping is True
+    t._last_tab_ping = -1000  # force the throttle window open
+    t.observe()
+    assert pings == [["FAKE-TARGET"]]
+
+
+def test_observe_no_ping_when_grouping_disabled(monkeypatch):
+    pings = []
+    monkeypatch.setattr(chrome_mod.tab_groups, "activity", lambda ids: pings.append(ids))
+    f = FakeBrowserFactory(loaded=[True])  # conftest disables tab_groups -> enabled() False
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    assert t._grouping is False
+    t._last_tab_ping = -1000
+    t.observe()
+    assert pings == []
 
 
 def test_observe_adds_readable_keeps_url():

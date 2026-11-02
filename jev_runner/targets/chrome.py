@@ -8,9 +8,12 @@ import sys
 import time
 from pathlib import Path
 
+from .. import tab_groups
 from .base import StalePage, TargetBlocked
 
 _log = logging.getLogger("jevd")
+
+_TAB_ACTIVITY_EVERY = 30.0  # seconds between broker keep-alive pings for a claimed tab
 
 LOAD_TIMEOUT = 15.0
 _POLL = 0.25
@@ -218,6 +221,13 @@ class ChromeTarget:
         self._factory = browser_factory or _default_factory
         self.url = url
         self.browser = self._open(url)
+        # Register this tab with AI Broker so the Tab Groups extension names+colours it (best-effort;
+        # a no-op without a broker token, and a failure never affects the run).
+        self._tab = getattr(self.browser, "target", None)
+        self._grouping = bool(self._tab) and tab_groups.enabled()
+        self._last_tab_ping = _monotonic()
+        if self._tab:
+            tab_groups.claim(self._tab)
 
     def _open(self, url: str):
         b = self._factory(url, True)
@@ -254,6 +264,9 @@ class ChromeTarget:
         self._add_overlay_actions(page)
         self._merge_iframe_actions(page)
         page["readable"] = True
+        if self._grouping and _monotonic() - self._last_tab_ping > _TAB_ACTIVITY_EVERY:
+            self._last_tab_ping = _monotonic()  # keep the claimed tab alive past the broker's sweep
+            tab_groups.activity([self._tab])
         return page
 
     def _merge_iframe_actions(self, page: dict) -> None:
