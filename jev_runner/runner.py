@@ -8,6 +8,7 @@ import time
 from jev_ultrafast import model
 
 from . import result
+from . import signin
 from . import verify as verify_mod
 from .config import Config
 from .flows import (
@@ -107,6 +108,7 @@ class Runner:
         self.session_id, self.target, self.params, self.cfg = session_id, target, params, cfg
         self.goal = goal_text(goal, params)
         self._goal_raw = goal  # saved flows keep the goal without this run's values
+        self._signin_ok = signin.goal_wants_signin(goal, params)
         self._add_hints(memory, target, goal, start)  # fold retrieved lessons into the goal context
         self.max_steps, self.money_params, self.flow = max_steps, money_params or [], flow
         if flow is not None:  # the flow's money-critical keys guard every replay
@@ -319,6 +321,9 @@ class Runner:
         if self._no_progress():
             raise _Stop("blocked", "no_progress")
         page = self._observe()
+        if (getattr(self.target, "kind", None) == "chrome" and not self._signin_ok
+                and signin.is_signin_page(page)):
+            raise _Stop("blocked", "signed_out")  # a person must sign in in that Chrome
         replay = self._match_flow(page)
         if replay is None and self.flow is not None:
             self._resyncing = True

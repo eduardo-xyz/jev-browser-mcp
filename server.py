@@ -49,6 +49,8 @@ def run_task(
       (`reason` says why). Treat the goal as NOT done; check the screen (`screenshot`) before
       retrying. A `done` with reason `verified_after_blocked` means Jev gave up but the goal is
       visibly met.
+    - `blocked` with reason `signed_out` (chrome): the browser is signed out of the site; a
+      person must sign in in that Chrome (2FA included), then retry. Not retried automatically.
     - `error` with reason `money_action_uncertain`: tell the user to check the app
       manually, then call `end_session` (the session is terminal).
     Results may include `flow_used` / `flow_saved` / `flow_updated` (learned flows replay

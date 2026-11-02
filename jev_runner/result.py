@@ -9,6 +9,13 @@ def _line(h: dict) -> str:
     return s
 
 
+HINTS = {
+    "signed_out": ("This Chrome is signed out of the site (it landed on a sign-in page). A person must "
+                   "sign in in that Chrome window, including any 2FA, then run the task again. To have "
+                   "the run itself sign in, say so in the goal."),
+}
+
+
 def build(runner) -> dict:
     out = {
         "session_id": runner.session_id,
@@ -21,6 +28,8 @@ def build(runner) -> dict:
     }
     if runner.reason:
         out["reason"] = runner.reason
+        if runner.reason in HINTS:
+            out["hint"] = HINTS[runner.reason]
     for key in ("field", "expected", "seen", "control"):
         if runner.pending and key in runner.pending:
             out[key] = runner.pending[key]
