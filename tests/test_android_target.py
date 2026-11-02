@@ -468,3 +468,19 @@ def test_fill_clears_clipboard_after_typing(fake_device, link):
     f = next(a for a in p["actions"] if a["kind"] == "fill")
     t.act(f, p, text="s3cret")
     assert fake_device.calls[-1][0] == "set_text" and fake_device.clipboard == ""
+
+
+def test_observe_reads_the_shown_app_when_focus_is_elsewhere(fake_device, link):
+    # A keyboard/overlay window holds focus while WhatsApp fills the screen: reading only the
+    # focused package used to come back empty and stop the run as screen_unreadable.
+    from tests.test_android_tree import _OVERLAY_XML
+    fake_device.xml = _OVERLAY_XML
+    fake_device.current = {"package": "com.grammarly.android.keyboard", "activity": "Bubble"}
+    p = mk(link, fake_device).observe()
+    assert p["readable"] and "El costo es 30 mil" in p["text"]
+    assert p["url"].startswith("com.whatsapp/") and p["focused_package"] == "com.grammarly.android.keyboard"
+
+
+def test_observe_keeps_focused_app_when_it_is_readable(fake_device, link):
+    p = mk(link, fake_device).observe()
+    assert p["url"].startswith("net.bac.sbe.android/") and "focused_package" not in p

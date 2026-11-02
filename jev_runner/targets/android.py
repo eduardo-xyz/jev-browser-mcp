@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 from time import monotonic, sleep
 
-from ..android_tree import parse_hierarchy
+from ..android_tree import parse_hierarchy, screen_package
 from ..guards import normalize
 from .base import DeviceDisconnected, StalePage, TargetBlocked
 
@@ -175,6 +175,15 @@ class AndroidTarget:
             info = d.app_current()
             xml = d.dump_hierarchy(compressed=False)
             p = parse_hierarchy(xml, info["package"], info["activity"])
+            if not p["readable"] and not p["shade_open"]:
+                # the focused window (keyboard bubble, another app's overlay) is not what's on
+                # screen: read the app that actually fills the display instead of giving up
+                shown = screen_package(xml)
+                if shown and shown != info["package"]:
+                    alt = parse_hierarchy(xml, shown, "")  # its activity is unknown
+                    if alt["readable"]:
+                        alt["focused_package"] = info["package"]
+                        p = alt
             if p["shade_open"]:
                 p = parse_hierarchy(xml, info["package"], info["activity"], include_system_ui=True)
             return p

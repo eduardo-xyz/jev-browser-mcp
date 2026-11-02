@@ -152,6 +152,32 @@ def _shade_open(nodes):
     return _union_area(sysui) > _SHADE_FRACTION * screen
 
 
+_NOT_AN_APP = re.compile(r"inputmethod|keyboard|\.ime\b|honeyboard", re.I)
+
+
+def screen_package(xml: str) -> str | None:
+    """The app whose nodes cover most of the screen, ignoring the system UI and keyboards.
+
+    Android's "current app" is the window with input focus, which is not always what is on screen:
+    a keyboard/writing-assistant bubble or another app's overlay can hold focus while e.g. WhatsApp
+    fills the display. Parsing only the focused package then reads as an empty, unreadable screen."""
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+    rects: dict[str, list] = {}
+    for el in root.iter("node"):
+        pkg = el.get("package", "")
+        if not pkg or pkg == SYSTEMUI or _NOT_AN_APP.search(pkg):
+            continue
+        b = _bounds(el.get("bounds"))
+        if b[2] > b[0] and b[3] > b[1]:
+            rects.setdefault(pkg, []).append(b)
+    if not rects:
+        return None
+    return max(rects, key=lambda p: _union_area(rects[p]))
+
+
 def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bool = False) -> dict:
     url = f"{package}/{activity}"
     try:

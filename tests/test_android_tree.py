@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from jev_runner.android_tree import parse_hierarchy
+from jev_runner.android_tree import parse_hierarchy, screen_package
 
 
 def page():
@@ -259,3 +259,24 @@ def test_caption_naming_an_icon_is_not_a_second_button():
            '</node></hierarchy>')
     labelled = [a for a in parse_hierarchy(xml, "a.b", "M")["actions"] if a.get("label") == "Transferir dinero"]
     assert len(labelled) == 1 and labelled[0]["id"] == "n0"
+
+
+_OVERLAY_XML = (
+    '<hierarchy>'
+    '<node package="com.android.systemui" class="android.widget.FrameLayout" enabled="true"'
+    ' bounds="[0,0][1000,80]"/>'
+    '<node package="com.whatsapp" class="android.widget.FrameLayout" enabled="true" bounds="[0,80][1000,2000]">'
+    '<node package="com.whatsapp" class="android.widget.TextView" enabled="true" text="El costo es 30 mil"'
+    ' bounds="[20,900][600,960]"/>'
+    '<node package="com.whatsapp" class="android.widget.EditText" clickable="true" enabled="true" text=""'
+    ' hint="Message" bounds="[20,1850][800,1950]"/></node>'
+    '<node package="com.grammarly.android.keyboard" class="android.widget.ImageView" clickable="true"'
+    ' enabled="true" bounds="[900,1700][980,1780]"/>'
+    '</hierarchy>'
+)
+
+
+def test_screen_package_is_the_app_filling_the_screen():
+    assert screen_package(_OVERLAY_XML) == "com.whatsapp"  # not systemui, not the keyboard bubble
+    assert screen_package("<hierarchy/>") is None
+    assert screen_package("not xml") is None
