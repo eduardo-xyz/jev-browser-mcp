@@ -152,14 +152,34 @@ _OVERLAY_JS = """(() => {
   const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
   const inOverlay = e => {
     for (let n = e; n && n !== document.body; n = n.parentElement) {
-      if (n.getAttribute && (n.getAttribute('role') === 'dialog' || n.getAttribute('aria-modal') === 'true')) return true;
+      if (n.getAttribute && (['dialog', 'menu', 'listbox'].includes(n.getAttribute('role')) || n.getAttribute('aria-modal') === 'true')) return true;
       const s = getComputedStyle(n);
       if ((s.position === 'fixed' || s.position === 'absolute') && (parseInt(s.zIndex) || 0) >= 1000) return true;
     }
     return false;
   };
   const out = [], base = 2000000, seen = new Set();
-  for (const e of document.querySelectorAll('button,[role="button"],a[role="button"],[role="menuitem"]')) {
+  // Dropdown options are often plain divs: take a pointer-cursor element in an overlay whose parent
+  // isn't pointer (the option itself, not its inner span), with a short text of its own.
+  const pointer = e => e && e.nodeType === 1 && getComputedStyle(e).cursor === 'pointer';
+  const CONTROL = 'a[href],button,input,textarea,select,summary,' + ['button', 'link', 'checkbox', 'radio',
+    'switch', 'tab', 'menuitem', 'menuitemradio', 'menuitemcheckbox', 'option', 'combobox', 'textbox']
+    .map(r => '[role="' + r + '"]').join(',');
+  const items = [...document.querySelectorAll('button,[role="button"],a[role="button"],[role="menuitem"]')];
+  // Only scan inside overlay roots (portals land on <body>), never the whole page: heavy SPAs.
+  const roots = [...document.querySelectorAll('[role="dialog"],[aria-modal="true"],[role="menu"],[role="listbox"]'),
+    ...[...document.body.children].filter(n => {
+      const s = getComputedStyle(n);
+      return (s.position === 'fixed' || s.position === 'absolute') && (parseInt(s.zIndex) || 0) >= 1000;
+    })];
+  let scanned = 0;
+  for (const root of roots) for (const e of root.querySelectorAll('div,span,li,a')) {
+    if (++scanned > 2000) break;
+    if (!pointer(e) || pointer(e.parentElement) || e.closest(CONTROL) || e.querySelector(CONTROL)) continue;
+    const t = (e.innerText || '').trim();
+    if (t && t.length <= 40 && !t.includes('\\n') && inOverlay(e)) items.push(e);
+  }
+  for (const e of items) {
     if (!vis(e) || !inOverlay(e) || e.disabled) continue;
     const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
     if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
