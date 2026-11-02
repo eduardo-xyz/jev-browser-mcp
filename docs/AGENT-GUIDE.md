@@ -73,9 +73,30 @@ idle sweep (10 min) won't close an in-use tab. With no token/`BU_NAME` it is a s
 | `end_session(session_id)` | Always call when finished, and after `money_action_uncertain`. |
 | `add_lesson(body, target, app, goal, screen_tags)` | Save durable playbook knowledge to the experience memory (replaces hand-editing `lessons.md`), e.g. "avoid the Quiero sheet". Scope it with `target`/`app`/`goal` so future runs on the same app/goal retrieve it automatically. Account/PII digit runs are stripped. |
 | `status`, `list_flows`, `delete_flow` | Housekeeping. |
+| `push_file(path, dest_dir)` | Mac → phone: copies into `/sdcard/Download` (default) and indexes it so the phone's gallery/document/attach pickers list it. |
+| `pull_file(phone_path)` | Phone → Mac: copies a `/sdcard/...` file into the data dir's `inbox/`. |
+| `share_file(path, package, mime)` | Opens Android's Share for a Mac file (pushed first) or a `/sdcard/...` file; with `package` (e.g. `com.whatsapp`) straight into that app. Then `run_task` to pick the chat and tap Send. Prefer this over an app's in-app file picker (WhatsApp's document picker often stalls). Refused while a run is driving the phone. |
 
 Every run also records scrubbed metrics, and each run automatically retrieves the lessons relevant
 to its goal/app and feeds them to Jev as hints — so writing a good lesson once helps future runs.
+
+## Moving files
+
+Several ways, pick the one that fits:
+
+| From → to | How |
+|---|---|
+| Mac → web page | `run_task(target="chrome", files=["/Users/…/Downloads/invoice.pdf"], goal="Attach the invoice and save")`. The page's file inputs (even hidden ones behind an "Upload" button) appear as `Upload file <name> → <field>` actions; choosing one sets the file directly. The macOS file picker never opens. A single-file input takes the next file in the list. |
+| web page → Mac | Anything a chrome run downloads is listed in the result's `downloads` (finished files new in `~/Downloads`). |
+| Mac → phone | `push_file`, then a `run_task` that attaches it from the app's picker (it's in Downloads / recent files). |
+| Mac or phone → app on the phone | `share_file(path, package=...)`, then `run_task` to choose the recipient and Send. |
+| phone → Mac | `pull_file("/sdcard/Download/x.pdf")`. |
+| phone → web page | `pull_file`, then `run_task(chrome, files=[<local path>])`. |
+
+Local paths must be under the allowed folders: the data dir's `outbox/` (a bare file name means
+outbox), `~/Downloads`, `~/Desktop`, `~/Documents`, or what `file_roots` in `config.toml` lists.
+Hidden files and key/secret-looking names (`.env`, `id_rsa`, `*.pem`, `*token*`, …) are refused.
+Uploading is not sending: the page's Send/Save button afterwards still goes through every guard.
 
 ## Results and what to do
 

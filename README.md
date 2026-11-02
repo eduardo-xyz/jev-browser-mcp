@@ -22,12 +22,19 @@ keys). Set the keys, then restart `jevd` so it picks them up.
 
 | Tool | Purpose |
 |---|---|
-| `run_task(target, goal, url_or_app?, params?, money_params?, flow?, save_as?, max_steps=40, session_id?, device?, learn=True)` | Run one goal on `chrome` or `android`. `url_or_app` is a URL, an Android package, or an Android app name. |
+| `run_task(target, goal, url_or_app?, params?, money_params?, flow?, save_as?, max_steps=40, session_id?, device?, learn=True, files?)` | Run one goal on `chrome` or `android`. `url_or_app` is a URL, an Android package, or an Android app name. |
 | `resume(session_id, input?, instruction?, confirm=False)` | Continue a paused session. |
 | `screenshot(session_id)` | Save a screenshot; returns a file path. |
 | `end_session(session_id)` | Close the session and release the device. |
 | `status()` | `sessions` (id, target, status, `idle_s`), `android` (`serial`, `connected`), `flows` (count). |
 | `list_flows()` / `delete_flow(name)` | Manage saved flows. |
+| `push_file(path, dest_dir?)` / `pull_file(phone_path)` | Copy a file Mac → phone (`/sdcard/Download`, indexed for pickers) or phone → Mac (`inbox/`). |
+| `share_file(path, package?, mime?)` | Open Android's Share for a file (optionally straight into one app). |
+
+Files: `run_task(target="chrome", files=[...])` uploads through the page's file inputs without the
+OS picker; a chrome result lists new `downloads`. Allowed local folders: `outbox/`, `~/Downloads`,
+`~/Desktop`, `~/Documents` (override with `file_roots`); hidden/secret-looking files are refused.
+See [`docs/AGENT-GUIDE.md`](docs/AGENT-GUIDE.md#moving-files).
 
 Usage rules: one `run_task` call per goal. Statuses: `paused_needs_input` means ask the user
 and call `resume(input=...)`; `paused_mismatch` means show `expected`/`seen` and call
@@ -63,6 +70,7 @@ Agents driving jev-runner: read [`docs/AGENT-GUIDE.md`](docs/AGENT-GUIDE.md).
 
 Everything lives in `$JEV_DATA_DIR` (optional), default `~/.local/share/jev-runner/`:
 `jevd.sock`, `jevd.lock`, `config.toml`, `flows/`, `receipts/`, `screens/` (screenshots),
+`outbox/` (files to upload/push), `inbox/` (files pulled from the phone),
 `jevd.log`, `jevd.stderr` (daemon startup errors).
 
 Restart the daemon (e.g. after setting keys or editing `config.toml`; the next tool call

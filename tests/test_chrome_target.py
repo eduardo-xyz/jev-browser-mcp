@@ -765,3 +765,46 @@ def test_pointer_text_discovery_failure_never_breaks_observe():
         return []
     f.browsers[0].evaluate = ev
     assert t.observe()["readable"] is True
+
+
+def test_file_inputs_offered_only_when_run_has_files():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: ([{"node": 5000000, "label": "Attach", "accept": ".pdf", "multiple": False}]
+                               if 'input[type="file"]' in expr and "5000000" in expr else [])
+    assert not [a for a in t.observe()["actions"] if a.get("file_input")]
+    t.set_files(["/u/Downloads/invoice.pdf"])
+    assert ("Page.setInterceptFileChooserDialog", {"enabled": True}) in b.calls
+    up = [a for a in t.observe()["actions"] if a.get("file_input")]
+    assert [(a["id"], a["label"], a["kind"]) for a in up] == [
+        ("up1", "Upload file invoice.pdf → Attach", "click")]
+    assert "/u/Downloads" not in up[0]["label"]  # names only, never the local path
+
+
+def test_upload_sets_files_via_cdp_without_clicking():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    t.set_files(["/u/a.pdf", "/u/b.pdf"])
+    def call(method, **params):
+        b.calls.append((method, params))
+        if method == "Runtime.evaluate":
+            return {"result": {"type": "object", "objectId": "OBJ1"}}
+        return {}
+    b.call = call
+    action = {"id": "up1", "node": 5000000, "kind": "click", "label": "Upload file", "file_input": True}
+    t.act(action, {})
+    t.act(action, {})  # single-file input: the next run file
+    sets = [p for m, p in b.calls if m == "DOM.setFileInputFiles"]
+    assert sets == [{"files": ["/u/a.pdf"], "objectId": "OBJ1"}, {"files": ["/u/b.pdf"], "objectId": "OBJ1"}]
+    assert not b.acts and not any(m == "Input.dispatchMouseEvent" for m, _ in b.calls)
+
+
+def test_upload_gone_input_is_retryable_stale():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    t.set_files(["/u/a.pdf"])
+    f.browsers[0].call = lambda method, **p: {"result": {"type": "object", "subtype": "null"}}
+    with pytest.raises(StalePage):
+        t.act({"id": "up1", "node": 5000000, "kind": "click", "file_input": True}, {})

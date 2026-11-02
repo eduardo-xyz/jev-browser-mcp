@@ -386,6 +386,46 @@ _POINTER_TEXT_JS = """(() => {
 })()"""
 
 
+# File inputs, including hidden ones behind a styled "Upload" button (upstream skips type=file).
+# Offered only when the run was given files: choosing one sets the files directly via CDP, so the
+# OS file picker never opens. Label: the input's own name, else the nearest short text around it.
+_FILE_INPUTS_JS = """(() => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes) return [];
+  const clean = s => String(s || '').replace(/\\s+/g, ' ').trim();
+  const out = [], base = 5000000;
+  for (const e of document.querySelectorAll('input[type="file"]')) {
+    if (e.disabled || out.length >= 10) continue;
+    let label = clean(e.getAttribute('aria-label') || [...(e.labels || [])].map(l => l.innerText).join(' ') ||
+      e.getAttribute('title') || '');
+    for (let n = e.parentElement, i = 0; !label && n && n !== document.body && i < 5; n = n.parentElement, i++) {
+      const t = clean(n.innerText);
+      if (t && t.length <= 60) label = t;
+      else if (t.length > 60) break;
+    }
+    label = label || clean(e.name || e.id) || 'file';
+    const id = base + out.length;
+    c.nodes.set(id, e);
+    out.push({node: id, label: label.slice(0, 60), accept: e.accept || '', multiple: !!e.multiple});
+  }
+  return out;
+})()"""
+
+
+def _file_input_actions(found, names: list[str], prefix: str = "up") -> list:
+    """'Upload <files> → <input label>' click actions for discovered file inputs."""
+    out = []
+    for i, f in enumerate(found if isinstance(found, list) else []):
+        if not isinstance(f, dict) or not isinstance(f.get("node"), int):
+            continue
+        what = ", ".join(names) if f.get("multiple") else " / ".join(names)
+        out.append({"id": f"{prefix}{i + 1}", "node": f["node"], "kind": "click",
+                    "label": f"Upload file {what} → {f.get('label') or 'file'}"[:120],
+                    "role": "button", "value": "", "file_input": True,
+                    "multiple": bool(f.get("multiple")), "accept": f.get("accept", "")})
+    return out
+
+
 def _pointer_text_actions(found, labels: set, prefix: str = "tx") -> list:
     """Actions for discovered clickable text, skipping labels already offered (each label once)."""
     out = []
@@ -465,6 +505,8 @@ class ChromeTarget:
         self._factory = browser_factory or _default_factory
         self.url = url
         self.browser = self._open(url)
+        self._files: list[str] = []  # local paths this run may upload (set by the daemon)
+        self._next_file = 0
         # Register this tab with AI Broker so the Tab Groups extension names+colours it (best-effort;
         # a no-op without a broker token, and a failure never affects the run).
         self._tab = getattr(self.browser, "target", None)
@@ -472,6 +514,18 @@ class ChromeTarget:
         self._last_tab_ping = _monotonic()
         if self._tab:
             tab_groups.claim(self._tab)
+
+    def set_files(self, paths: list[str]) -> None:
+        """Files this run may upload. With files, the OS file picker is intercepted (never opens)
+        and the page's file inputs are offered as "Upload file" actions."""
+        self._files, self._next_file = list(paths or []), 0
+        try:
+            self.browser.call("Page.setInterceptFileChooserDialog", enabled=bool(self._files))
+        except Exception:
+            pass  # best-effort: the upload action itself never needs the picker
+
+    def _upload_names(self) -> list[str]:
+        return [Path(p).name for p in self._files]
 
     def _open(self, url: str):
         b = self._factory(url, True)
@@ -508,6 +562,12 @@ class ChromeTarget:
         self._add_overlay_actions(page)
         self._add_icon_controls(page)
         self._add_pointer_text(page)
+        if self._files:
+            try:
+                page.setdefault("actions", []).extend(_file_input_actions(
+                    self.browser.evaluate(_FILE_INPUTS_JS), self._upload_names()))
+            except Exception:
+                pass  # never let discovery break a normal observe
         n = _enrich_blank_labels(page.get("actions", []), "node", self.browser.evaluate)
         self._drop_unnamed_icons(page.get("actions", []))
         if n and os.environ.get("JEV_DEBUG_IFRAME"):
@@ -562,6 +622,12 @@ class ChromeTarget:
             for a in texts:
                 a.pop("_guard", None)  # in-frame act resolves by node; no upstream freshness check
             raw += texts
+            if self._files:
+                try:
+                    raw += _file_input_actions(self._frame_eval(session_id, _FILE_INPUTS_JS),
+                                               self._upload_names())
+                except Exception:
+                    pass
             synth = _enrich_blank_labels(raw, "node", lambda expr: self._frame_eval(session_id, expr))
             self._drop_unnamed_icons(raw)
             if debug and synth:
@@ -590,7 +656,8 @@ class ChromeTarget:
                           "frame_node": a["node"], "kind": kind,
                           "label": a.get("label", ""), "role": a.get("role", ""),
                           "value": a.get("value", ""), "frame": idx}
-                for key in ("checked", "selected", "expanded", "synth_label", "raw_label"):
+                for key in ("checked", "selected", "expanded", "synth_label", "raw_label",
+                            "file_input", "multiple"):
                     if key in a:
                         merged[key] = a[key]
                 actions.append(merged)
@@ -868,6 +935,9 @@ class ChromeTarget:
             raise
 
     def act(self, action: dict, page: dict, text: str | None = None, verify: bool = False) -> None:
+        if action.get("file_input"):
+            self._upload(action)
+            return
         if action.get("frame") is not None:
             self._act_in_frame(action, text)  # OOPIF: separate path; top-frame/money path unchanged
             return
@@ -889,6 +959,39 @@ class ChromeTarget:
                 raise StalePage(str(exc)) from exc
             # Anything else: input may already have been dispatched; never surface as StalePage.
             raise RuntimeError(f"action_uncertain: {exc}") from exc
+
+    def _upload(self, action: dict) -> None:
+        """Set the run's files on a file input via CDP (no OS picker). A single-file input takes
+        the next file not yet uploaded. Resolving the input is retryable (StalePage); once the
+        files are set, a failure is action_uncertain."""
+        if not self._files:
+            raise StalePage("No files were given for this run (run_task files=[...]).")
+        if action.get("frame") is not None:
+            frame = getattr(self, "_frames", {}).get(action["frame"])
+            if not frame:
+                raise StalePage("Frame gone since this decision. Observe again.")
+            call = lambda method, **kw: _cdp(method, session_id=frame["session"], **kw)
+            node = action.get("frame_node", action["node"])
+        else:
+            call, node = self.browser.call, action["node"]
+        try:
+            res = call("Runtime.evaluate", returnByValue=False,
+                       expression=f"(window.__jevFast && window.__jevFast.nodes.get({int(node)})) || null")
+        except Exception as exc:
+            raise StalePage(f"File input not reachable: {exc}") from exc
+        obj = (res or {}).get("result") or {}
+        if not obj.get("objectId") or obj.get("subtype") == "null":
+            raise StalePage("File input gone since this decision. Observe again.")
+        if action.get("multiple"):
+            chosen = list(self._files)
+        else:
+            chosen = [self._files[self._next_file % len(self._files)]]
+            self._next_file += 1
+        try:
+            call("DOM.setFileInputFiles", files=chosen, objectId=obj["objectId"])
+        except Exception as exc:
+            raise RuntimeError(f"action_uncertain: {exc}") from exc
+        _log.info("upload: %d file(s) set on %r", len(chosen), action.get("label"))
 
     def _act_in_frame(self, action: dict, text: str | None) -> None:
         """Click/fill an element inside a cross-origin iframe by translating its in-frame centre to

@@ -249,3 +249,8 @@ def test_destructive_label_is_never_tap_retried():
     cfg = Config()
     for label in ["Delete", "Eliminar", "Remove", "delete — Allen Brothers"]:
         assert not may_retry_tap({"kind": "click", "label": label}, cfg), label
+
+
+def test_upload_action_never_tap_retried(cfg):
+    from jev_runner.guards import may_retry_tap
+    assert not may_retry_tap({"kind": "click", "label": "Upload file a.pdf → Attach", "file_input": True}, cfg)

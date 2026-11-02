@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
-from . import config, result
+from . import config, files, result
 from .adb_link import AdbLink
 from .config import Config
 from .config import socket_path as config_socket_path
@@ -53,6 +53,7 @@ class Session:
     last_used: float = field(default_factory=time.time)
     lock: threading.Lock = field(default_factory=threading.Lock)
     closed: bool = False
+    run_started: float = 0.0  # epoch seconds the current run_task began (downloads since then)
 
     def idle_since(self) -> float:
         runner_used = self.runner.last_used if self.runner is not None else 0.0
@@ -140,6 +141,7 @@ class Daemon:
         runner = session.runner
         try:
             out = fn()
+            self._add_downloads(session, out)
             self._record_run(session, out)
             return out
         except BaseException as e:
@@ -152,6 +154,15 @@ class Daemon:
             raise OpError(f"interrupted: {type(e).__name__}") from e
         finally:
             session.last_used = time.time()
+
+    def _add_downloads(self, session: Session, out) -> None:
+        """Report files a chrome run downloaded (finished files new in the downloads folder)."""
+        if session.kind != "chrome" or not isinstance(out, dict) or not session.run_started:
+            return
+        found = files.new_downloads(Path(self.cfg.downloads_dir).expanduser(),
+                                    session.run_started - 1)
+        if found:
+            out["downloads"] = found
 
     def _record_run(self, session: Session, out: dict) -> None:
         """Record one run's metrics when it reaches a terminal status (not a pause). Best-effort:
@@ -194,7 +205,7 @@ class Daemon:
                     params: dict | None = None, money_params: list[str] | None = None,
                     flow: str | None = None, save_as: str | None = None, max_steps: int = 40,
                     session_id: str | None = None, device: str | None = None,
-                    learn: bool = True) -> dict:
+                    learn: bool = True, files: list[str] | None = None) -> dict:
         missing = [name for name in REQUIRED_ENV_VARS if not os.environ.get(name)]
         if missing:
             raise OpError(f"Missing required environment variable(s): {', '.join(missing)} "
@@ -209,6 +220,7 @@ class Daemon:
                 explicit = self.store.load(flow)
             except KeyError:
                 raise OpError("unknown_flow") from None
+        upload = self._check_upload(target, files)
         if save_as is not None:
             try:
                 slug(save_as)
@@ -232,6 +244,10 @@ class Daemon:
             if session.uncertain():
                 raise OpError(TERMINAL_MSG)
             start = url_or_app or session.start
+            set_files = getattr(session.target, "set_files", None)
+            if set_files is not None:
+                set_files(upload)  # every run states its own files; none clears the last run's
+            session.run_started = time.time()
             chosen = explicit
             if chosen is None and learn:
                 chosen = self.store.find(target, start, goal)
@@ -250,6 +266,19 @@ class Daemon:
             return self._drive(session, session.runner.run)
         finally:
             session.lock.release()
+
+    def _check_upload(self, target: str, paths) -> list[str]:
+        if not paths:
+            return []
+        if target != "chrome":
+            raise OpError("bad_args: files is for chrome uploads; on android use push_file or "
+                          "share_file first")
+        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+            raise OpError("bad_args: files must be a list of paths")
+        try:
+            return [str(files.check_local(p, self.cfg)) for p in paths]
+        except files.FileError as e:
+            raise OpError(str(e)) from None
 
     def _claim(self, target: str, url_or_app: str | None, device: str | None) -> tuple[Session, bool]:
         """A locked session for a run without session_id: (session, created).
@@ -377,6 +406,50 @@ class Daemon:
         lid = self.memory.add_lesson(target=target, app=app, goal=goal, body=body,
                                      screen_tags=screen_tags, source="agent")
         return {"lesson_id": lid}
+
+    # -- files ------------------------------------------------------------
+
+    def _adb_files(self) -> files.Adb:
+        try:
+            serial = self.link.ensure_connected()
+        except DeviceDisconnected as e:
+            raise OpError(f"device_disconnected: {e}"[:300]) from None
+        return files.Adb(serial)
+
+    def _phone_free(self) -> None:
+        """Opening the share sheet changes the phone's screen: not while a run drives it."""
+        with self._lock:
+            holder = self.sessions.get(self.devices.get(ANDROID_KEY) or "")
+        if holder is not None and not holder.settled():
+            raise OpError(f"device_busy: {holder.session_id} (status={holder.status()})")
+
+    def op_push_file(self, path: str, dest_dir: str = files.PHONE_DEFAULT_DIR) -> dict:
+        try:
+            local = files.check_local(path, self.cfg)
+            dest = self._adb_files().push(local, dest_dir)
+        except files.FileError as e:
+            raise OpError(str(e)) from None
+        return {"local": str(local), "phone_path": dest}
+
+    def op_pull_file(self, phone_path: str) -> dict:
+        try:
+            local = self._adb_files().pull(phone_path, files.inbox(self.cfg.data_dir))
+        except files.FileError as e:
+            raise OpError(str(e)) from None
+        return {"phone_path": phone_path, "local": str(local)}
+
+    def op_share_file(self, path: str, package: str | None = None, mime: str | None = None) -> dict:
+        self._phone_free()
+        try:
+            adb = self._adb_files()
+            if path.startswith(files.PHONE_ROOTS):
+                phone_path = files.check_phone(path)
+            else:
+                phone_path = adb.push(files.check_local(path, self.cfg))
+            out = adb.share(phone_path, package=package, mime=mime)
+        except files.FileError as e:
+            raise OpError(str(e)) from None
+        return {"phone_path": phone_path, **out}
 
     def op_end_session(self, session_id: str) -> dict:
         session = self._get(session_id)

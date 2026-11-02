@@ -711,3 +711,89 @@ def test_status_probes_configured_phone(cfg, script, monkeypatch):
         assert st == {"serial": None, "connected": False, "error": "no device"}
     finally:
         d.close()
+
+
+# -- files -------------------------------------------------------------------
+
+def test_files_only_for_chrome(daemon_with_fakes, keys):
+    r = run(daemon_with_fakes, target="android", goal="g", files=["/x/a.pdf"])
+    assert not r["ok"] and "push_file" in r["error"]
+    assert daemon_with_fakes.targets_created == 0
+
+
+def test_files_outside_roots_refused_before_target(daemon_with_fakes, keys, tmp_path):
+    (tmp_path / "a.pdf").write_text("x")
+    daemon_with_fakes.cfg.file_roots = [str(tmp_path / "allowed")]
+    r = run(daemon_with_fakes, target="chrome", goal="g", url_or_app="https://x", files=[str(tmp_path / "a.pdf")])
+    assert not r["ok"] and r["error"].startswith("path_not_allowed")
+    assert daemon_with_fakes.targets_created == 0
+
+
+def test_files_handed_to_target_and_cleared_next_run(daemon_with_fakes, keys, tmp_path):
+    (tmp_path / "a.pdf").write_text("x")
+    daemon_with_fakes.cfg.file_roots = [str(tmp_path)]
+    daemon_with_fakes.script.pages = lambda: [page(click("n2", "Ok")), page()]
+    daemon_with_fakes.script.choices = [["n2", "DONE"]]
+    seen = []
+    orig = daemon_with_fakes.target_factory
+    def factory(*a):
+        t = orig(*a)
+        t.set_files = lambda paths: seen.append(list(paths))
+        return t
+    daemon_with_fakes.target_factory = factory
+    r = run(daemon_with_fakes, target="chrome", goal="g", url_or_app="https://x", files=[str(tmp_path / "a.pdf")])
+    assert r["ok"], r
+    run(daemon_with_fakes, target="chrome", goal="g2", session_id=r["result"]["session_id"])
+    assert seen == [[str((tmp_path / "a.pdf").resolve())], []]
+
+
+def test_chrome_run_reports_new_downloads(daemon_with_fakes, keys, tmp_path):
+    daemon_with_fakes.cfg.downloads_dir = str(tmp_path)
+    daemon_with_fakes.script.pages = lambda: [page(click("n2", "Download"))]
+    daemon_with_fakes.script.choices = [["n2", "DONE"]]
+    orig = daemon_with_fakes.target_factory
+    def factory(*a):
+        t = orig(*a)
+        real_act = t.act
+        def act(action, pg, text=None, verify=False):
+            (tmp_path / "report.csv").write_text("x")
+            real_act(action, pg, text=text, verify=verify)
+        t.act = act
+        return t
+    daemon_with_fakes.target_factory = factory
+    r = run(daemon_with_fakes, target="chrome", goal="g", url_or_app="https://x")
+    assert r["result"]["downloads"] == [str(tmp_path / "report.csv")]
+
+
+class FakeAdb:
+    def __init__(self):
+        self.calls = []
+    def push(self, local, dest_dir="/sdcard/Download"):
+        self.calls.append(("push", local.name)); return f"{dest_dir}/{local.name}"
+    def pull(self, phone_path, dest):
+        self.calls.append(("pull", phone_path)); return dest / "a.pdf"
+    def share(self, phone_path, package=None, mime=None):
+        self.calls.append(("share", phone_path, package)); return {"uri": "content://m/1", "mime": "x", "package": package}
+
+
+def test_push_pull_share_ops(daemon_with_fakes, tmp_path, monkeypatch):
+    (tmp_path / "a.pdf").write_text("x")
+    daemon_with_fakes.cfg.file_roots = [str(tmp_path)]
+    adb = FakeAdb()
+    monkeypatch.setattr(daemon_with_fakes, "_adb_files", lambda: adb)
+    r = daemon_with_fakes.handle({"op": "push_file", "args": {"path": str(tmp_path / "a.pdf")}})
+    assert r["result"]["phone_path"] == "/sdcard/Download/a.pdf"
+    r = daemon_with_fakes.handle({"op": "pull_file", "args": {"phone_path": "/sdcard/Download/a.pdf"}})
+    assert r["ok"] and r["result"]["local"].endswith("a.pdf")
+    r = daemon_with_fakes.handle({"op": "share_file", "args": {"path": "/sdcard/Download/a.pdf", "package": "com.whatsapp"}})
+    assert r["ok"] and adb.calls[-1] == ("share", "/sdcard/Download/a.pdf", "com.whatsapp")
+    r = daemon_with_fakes.handle({"op": "push_file", "args": {"path": "/etc/passwd"}})
+    assert not r["ok"] and "path_not_allowed" in r["error"]
+
+
+def test_share_refused_while_phone_run_in_progress(daemon_with_fakes, keys, monkeypatch):
+    r = run(daemon_with_fakes, target="android", goal="otp")  # pauses for input: phone held
+    assert r["result"]["status"] == "paused_needs_input"
+    monkeypatch.setattr(daemon_with_fakes, "_adb_files", lambda: FakeAdb())
+    r = daemon_with_fakes.handle({"op": "share_file", "args": {"path": "/sdcard/Download/a.pdf"}})
+    assert not r["ok"] and r["error"].startswith("device_busy")

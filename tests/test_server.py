@@ -14,7 +14,7 @@ def _tools():
 def test_tools_registered():
     assert set(_tools()) == {
         "run_task", "resume", "screenshot", "read", "end_session", "status",
-        "list_flows", "delete_flow", "add_lesson",
+        "list_flows", "delete_flow", "add_lesson", "push_file", "pull_file", "share_file",
     }
 
 
@@ -51,6 +51,9 @@ def test_run_task_forwards_all_args(monkeypatch):
     ("list_flows", {}, "list_flows"),
     ("delete_flow", {"name": "n"}, "delete_flow"),
     ("add_lesson", {"body": "a lesson"}, "add_lesson"),
+    ("push_file", {"path": "/x/a.pdf"}, "push_file"),
+    ("pull_file", {"phone_path": "/sdcard/Download/a.pdf"}, "pull_file"),
+    ("share_file", {"path": "a.pdf", "package": "com.whatsapp"}, "share_file"),
 ])
 def test_thin_tools_forward(monkeypatch, tool, args, op):
     calls = []

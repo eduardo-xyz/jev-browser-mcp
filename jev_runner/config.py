@@ -72,6 +72,10 @@ class Config:
         "Delete", "Eliminar", "Borrar", "Remove", "Quitar", "Trash", "Move to trash",
         "Delete permanently", "Eliminar permanentemente",
     ])
+    # Folders local files may be uploaded/pushed from (empty = the data dir's outbox/,
+    # ~/Downloads, ~/Desktop, ~/Documents). Hidden and secret-looking files are always refused.
+    file_roots: list[str] = field(default_factory=list)
+    downloads_dir: str = "~/Downloads"  # where Chrome saves downloads (reported per run)
     session_ttl_s: int = 900
     reconnect_window_s: int = 30
     data_dir: Path = field(default_factory=data_dir)
@@ -79,7 +83,7 @@ class Config:
 
 LIST_FIELDS = ("money_apps", "money_labels", "money_labels_contextual",
                "money_exclude_words", "secret_patterns", "own_accounts", "navigation_labels",
-               "send_labels", "destructive_labels")
+               "send_labels", "destructive_labels", "file_roots")
 
 
 def load() -> Config:

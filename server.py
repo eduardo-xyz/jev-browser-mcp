@@ -30,6 +30,7 @@ def run_task(
     session_id: str | None = None,
     device: str | None = None,
     learn: bool = True,
+    files: list[str] | None = None,
 ) -> dict:
     """Run a natural-language goal on Mac Chrome or an Android phone using TypeSafe's Jev agent.
 
@@ -55,11 +56,18 @@ def run_task(
     one). `device_busy` errors name the session holding the device. `device` may be omitted,
     "default", or the configured android_serial (one phone; all android sessions share its
     lock); anything else fails with `unknown_device`.
+
+    Files: on chrome, pass `files` (absolute paths, or bare names in the data dir's outbox/) to
+    upload them: the page's file inputs then appear as "Upload file ..." actions and the OS file
+    picker never opens. Allowed folders: outbox/, ~/Downloads, ~/Desktop, ~/Documents (config
+    `file_roots`); hidden or key/secret-looking files are refused. Files a chrome run downloads are
+    listed in the result's `downloads`. For the phone use push_file / pull_file / share_file.
     """
     return _call("run_task", {
         "target": target, "goal": goal, "url_or_app": url_or_app, "params": params,
         "money_params": money_params, "flow": flow, "save_as": save_as,
         "max_steps": max_steps, "session_id": session_id, "device": device, "learn": learn,
+        "files": files,
     })
 
 
@@ -91,6 +99,31 @@ def read(session_id: str) -> dict:
     to list or read content when a `run_task` only "waits" because the real UI is inside an iframe.
     Returns `text` (merged) and `frames` (per-iframe text). It never clicks or changes anything."""
     return _call("read", {"session_id": session_id})
+
+
+@mcp.tool()
+def push_file(path: str, dest_dir: str = "/sdcard/Download") -> dict:
+    """Copy a Mac file to the Android phone (default its Download folder) and index it so the
+    phone's pickers (gallery, documents, attach) list it. Returns `phone_path`. Same allowed
+    folders as run_task `files`."""
+    return _call("push_file", {"path": path, "dest_dir": dest_dir})
+
+
+@mcp.tool()
+def pull_file(phone_path: str) -> dict:
+    """Copy a file from the phone (a path under /sdcard/, e.g. /sdcard/Download/x.pdf) to the Mac,
+    into the data dir's inbox/. Returns the `local` path."""
+    return _call("pull_file", {"phone_path": phone_path})
+
+
+@mcp.tool()
+def share_file(path: str, package: str | None = None, mime: str | None = None) -> dict:
+    """Open Android's Share for a file: a Mac path (pushed first) or a phone path under /sdcard/.
+    With `package` (e.g. com.whatsapp) it goes straight into that app's share screen; without it
+    Android shows its app picker. Then call run_task on android to pick the chat/recipient and tap
+    Send (the send guard applies). More reliable than an app's own in-app file picker. Refused with
+    device_busy while a run is driving the phone."""
+    return _call("share_file", {"path": path, "package": package, "mime": mime})
 
 
 @mcp.tool()

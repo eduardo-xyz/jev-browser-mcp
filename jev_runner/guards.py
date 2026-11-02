@@ -50,8 +50,8 @@ def may_retry_tap(action: dict, cfg: Config) -> bool:
     never a money, send/confirm or destructive label, a checkbox/switch, or a text field.
     Navigation labels are allowed even when they share a money-label prefix
     (e.g. "Transferir dinero" vs strong label "Transferir")."""
-    if action.get("kind") != "click" or "checked" in action:
-        return False
+    if action.get("kind") != "click" or "checked" in action or action.get("file_input"):
+        return False  # a re-run upload would set the next file again
     label = normalize(action.get("label") or "")
     if _label_matches(label, cfg.navigation_labels):
         return True
