@@ -47,12 +47,14 @@ OOPIF work. Keep the consequential half strictly on JEV Runner.
 
 ## JEV Runner gaps to watch (as of 2026-11-01)
 
-Cross-origin iframe **read / click / scroll** are validated end to end (GHL). Still rough:
+Cross-origin iframe **read / click / fill / scroll** are validated end to end (GHL): fill into an
+iframe search box filters the list, and navigation via a tab reports `done` on the URL change. Still
+rough:
 
-- **Fill inside an iframe** was dispatched but not yet confirmed to take effect live — verify with a
-  `screenshot`/`read` after an iframe fill.
-- **Navigate-only goals** ("open X") can report `blocked` even when they worked (no done-detector on
-  the new screen) — **don't trust the status line alone** on view/navigate goals; confirm.
+- **Navigate-only goals** can still report `blocked` on some screens even when they worked (e.g.
+  opening a workflow *editor* ended `blocked` though it opened; a tab switch that changes the URL
+  reports `done`) — don't trust the status line alone on view/navigate goals; confirm with
+  `screenshot`/`read`.
 - **Non-semantic controls** (divs with no role/label) still can't be targeted by name.
 - A **money button inside an iframe pauses for approval** (the amount check can't see iframe
   amounts) — that's the safe default, not a failure.
