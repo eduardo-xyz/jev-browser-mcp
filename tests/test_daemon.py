@@ -797,3 +797,11 @@ def test_share_refused_while_phone_run_in_progress(daemon_with_fakes, keys, monk
     monkeypatch.setattr(daemon_with_fakes, "_adb_files", lambda: FakeAdb())
     r = daemon_with_fakes.handle({"op": "share_file", "args": {"path": "/sdcard/Download/a.pdf"}})
     assert not r["ok"] and r["error"].startswith("device_busy")
+
+
+def test_daemon_env_adds_adb_dirs_without_dropping_path():
+    env = client.daemon_env({"PATH": "/usr/bin:/bin", "OPENAI_API_KEY": "k"})
+    parts = env["PATH"].split(":")
+    assert parts[:2] == ["/usr/bin", "/bin"] and "/opt/homebrew/bin" in parts
+    assert env["OPENAI_API_KEY"] == "k"  # the rest of the environment is inherited
+    assert client.daemon_env({"PATH": "/opt/homebrew/bin"})["PATH"].count("/opt/homebrew/bin") == 1

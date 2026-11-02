@@ -1,5 +1,6 @@
 """jevd client: one request per connection; autostarts the daemon when it isn't running."""
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -27,6 +28,18 @@ def _connect(path: Path) -> socket.socket:
     return s
 
 
+# Where adb usually lives. The daemon runs `adb` by name, and whoever autostarts it (an MCP host,
+# a GUI app, a bare shell) may have a PATH without Homebrew: jevd then can't see a USB phone.
+TOOL_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / "Library/Android/sdk/platform-tools"))
+
+
+def daemon_env(env=None) -> dict:
+    env = dict(os.environ if env is None else env)
+    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
+    env["PATH"] = os.pathsep.join(parts + [d for d in TOOL_DIRS if d not in parts])
+    return env
+
+
 def _spawn(stderr_path: Path) -> None:
     with open(stderr_path, "ab") as err:  # the child keeps its own copy of the fd
         subprocess.Popen(
@@ -34,6 +47,7 @@ def _spawn(stderr_path: Path) -> None:
             cwd=REPO_ROOT,  # jev_runner is imported from the repo, not an installed package
             stdin=subprocess.DEVNULL, stdout=err, stderr=err,
             start_new_session=True,  # survives the MCP server; inherits env (API keys)
+            env=daemon_env(),
         )
 
 
