@@ -699,3 +699,20 @@ def test_iframe_div_icon_controls_merged(monkeypatch):
     acts = [a for a in t.observe()["actions"] if a.get("frame")]
     assert [(a["id"], a["label"], a["frame_node"]) for a in acts] == [
         ("f1ic1", "dots vertical — Comox Valley", 3000000)]
+
+
+def test_iframe_overlay_menu_items_merged_and_deduped(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: []
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
+        {"id": "e1", "node": 4, "kind": "click", "label": "Edit", "role": "menuitem"}]})
+    def frame_eval(sid, expr):
+        if "aria-modal" in expr:  # overlay pass, run inside the frame
+            return [{"node": 2000000, "label": "Edit"}, {"node": 2000001, "label": "Delete"}]
+        return []
+    monkeypatch.setattr(t, "_frame_eval", frame_eval)
+    acts = {a["id"]: a for a in t.observe()["actions"] if a.get("frame")}
+    assert set(acts) == {"f1e1", "f1ov2"}  # "Edit" already offered by upstream: not duplicated
+    assert acts["f1ov2"]["label"] == "Delete" and acts["f1ov2"]["frame_node"] == 2000001

@@ -492,7 +492,8 @@ class ChromeTarget:
                 icons = []  # never let icon discovery break a normal observe
             for a in icons:
                 a.pop("_guard", None)  # in-frame act resolves by node; no upstream freshness check
-            raw = list(snap.get("actions", [])) + icons
+            raw = list(snap.get("actions", [])) + icons + self._frame_overlay_actions(
+                session_id, {a.get("label") for a in snap.get("actions", [])})
             synth = _enrich_blank_labels(raw, "node", lambda expr: self._frame_eval(session_id, expr))
             self._drop_unnamed_icons(raw)
             if debug and synth:
@@ -589,6 +590,22 @@ class ChromeTarget:
         for a in _icon_control_actions(found, "ic"):
             _record_guard(page, {"node": a["node"], "guard": a.pop("_guard")})
             actions.append(a)
+
+    def _frame_overlay_actions(self, session_id, labels: set) -> list:
+        """Overlay/menu options inside an OOPIF (a row menu opened in the iframe renders there)."""
+        try:
+            found = self._frame_eval(session_id, _OVERLAY_JS)
+        except Exception:
+            return []  # never let overlay discovery break a normal observe
+        out = []
+        for i, f in enumerate(found if isinstance(found, list) else []):
+            label = f.get("label") if isinstance(f, dict) else None
+            if not isinstance(f.get("node") if label else None, int) or label in labels:
+                continue
+            labels.add(label)
+            out.append({"id": f"ov{i + 1}", "node": f["node"], "kind": "click", "label": label,
+                        "role": "button", "value": ""})
+        return out
 
     @staticmethod
     def _drop_unnamed_icons(actions: list) -> None:
