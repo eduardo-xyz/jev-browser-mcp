@@ -574,3 +574,74 @@ def test_overlay_button_already_in_actions_is_not_duplicated():
         [{"node": 2000000, "label": "Not now"}] if "aria-modal" in expr else True)
     p = t.observe()
     assert [a for a in p["actions"] if a.get("id", "").startswith("ov")] == []
+
+
+def test_iframe_icon_button_gets_row_disambiguated_label(monkeypatch):
+    # an icon-only row menu arrives from upstream as label == role ("button"); the merge asks the
+    # owning frame for a semantic label and the action becomes targetable by row
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: []
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
+        {"id": "e1", "node": 7, "kind": "click", "label": "button", "role": "button", "value": ""},
+        {"id": "e2", "node": 8, "kind": "click", "label": "button", "role": "button", "value": ""},
+        {"id": "e3", "node": 9, "kind": "click", "label": "Create workflow", "role": "button"}]})
+    evals = []
+    def frame_eval(sid, expr):
+        evals.append((sid, expr))
+        return {"7": "menu — Allen Brothers", "8": "menu — Comox Valley"}
+    monkeypatch.setattr(t, "_frame_eval", frame_eval)
+    page = t.observe()
+    by_id = {a["id"]: a for a in page["actions"] if a.get("frame")}
+    assert by_id["f1e1"]["label"] == "menu — Allen Brothers"
+    assert by_id["f1e2"]["label"] == "menu — Comox Valley"
+    assert by_id["f1e1"]["synth_label"] is True and by_id["f1e1"]["raw_label"] == "button"
+    assert by_id["f1e3"]["label"] == "Create workflow" and "synth_label" not in by_id["f1e3"]
+    # only blank nodes are asked about, in the frame's own session, by their in-frame node id
+    assert len(evals) == 1 and evals[0][0] == "S1" and evals[0][1].endswith("([7, 8])")
+
+
+def test_top_frame_blank_label_enriched_and_labelled_kept():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    orig = b.observe
+    b.observe = lambda screenshot=True: {**orig(screenshot=screenshot), "actions": [
+        {"id": "e1", "node": 1, "kind": "click", "label": "button", "role": "button"},
+        {"id": "e2", "node": 2, "kind": "click", "label": "⋮", "role": "button"},
+        {"id": "e3", "node": 3, "kind": "click", "label": "Save", "role": "button"}]}
+    def ev(expr):
+        if "__jevFast" in expr and "rowOf" in expr:
+            return {"1": "delete — Allen Brothers"}  # node 2: nothing found, stays as-is
+        return []
+    b.evaluate = ev
+    acts = {a["id"]: a for a in t.observe()["actions"]}
+    assert acts["e1"]["label"] == "delete — Allen Brothers" and acts["e1"]["synth_label"]
+    assert acts["e2"]["label"] == "⋮" and "synth_label" not in acts["e2"]
+    assert acts["e3"]["label"] == "Save"
+
+
+def test_label_enrichment_failure_never_breaks_observe():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    orig = b.observe
+    b.observe = lambda screenshot=True: {**orig(screenshot=screenshot), "actions": [
+        {"id": "e1", "node": 1, "kind": "click", "label": "button", "role": "button"}]}
+    def ev(expr):
+        if "rowOf" in expr:
+            raise RuntimeError("frame gone")
+        return []
+    b.evaluate = ev
+    assert t.observe()["actions"][0]["label"] == "button"
+
+
+def test_synthesized_label_never_turns_row_text_into_money_or_send():
+    # a synthesized "<icon> — <row>" label never starts with row text, so a row named "Pay" or
+    # "Send" can't turn an icon button into a money/send action
+    from jev_runner.config import Config
+    from jev_runner.guards import is_money_action, is_send_action
+    a = {"kind": "click", "label": "menu — Send", "node": 1}
+    assert not is_send_action(a, Config())
+    assert not is_money_action({**a, "label": "menu — Pay now"}, {}, {}, Config())

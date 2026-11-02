@@ -174,6 +174,115 @@ _OVERLAY_JS = """(() => {
 })()"""
 
 
+# Icon-only controls (a row's 3-dot menu, a trash icon) have no innerText/aria name, so upstream
+# labels them with their bare role ("button") and several of them in a list are indistinguishable:
+# the model can't target the right one. For the node ids given, derive a label from generic DOM
+# affordances only: the control's own aria-label/title/tooltip/test id, then its icon (a
+# descendant's aria-label/title, SVG <title>, <use href="#id">, data-icon, or an icon-library class
+# such as "fa-trash"), else aria-haspopup ("menu"), else the role; then append the nearest
+# row/item text so the label names the row it acts on ("menu — Allen Brothers"). Read-only: it never
+# assigns node ids or changes the page. Returns {node id: label} for nodes it could label.
+_ICON_LABEL_FN = """((ids) => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes) return {};
+  const clean = s => String(s || '').replace(/\\s+/g, ' ').trim();
+  const human = s => clean(String(s || '').replace(/^.*#/, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[-_.:\\/]+/g, ' ')).toLowerCase().replace(/^(?:icons?|ic|svg) /, '');
+  const attrs = ['aria-label', 'title', 'data-tooltip', 'data-title', 'data-original-title',
+    'data-tip', 'data-testid', 'data-test', 'data-test-id', 'data-qa', 'data-cy'];
+  const machine = ['data-testid', 'data-test', 'data-test-id', 'data-qa', 'data-cy'];
+  const attrOf = e => {
+    for (const a of attrs) {
+      const v = clean(e.getAttribute(a));
+      if (v) return machine.includes(a) ? human(v) : v;
+    }
+    return '';
+  };
+  const iconClass = /^(?:fa[srlbdk]?|mdi|bi|ri|ti|la|las|lar|icon|ion|gg|uil|ph|feather|lucide|tabler|heroicon|material-icons)-(.+)$/;
+  const iconOf = e => {
+    for (const d of e.querySelectorAll('*')) {
+      const own = clean(d.getAttribute('aria-label') || d.getAttribute('title') || d.getAttribute('data-icon'));
+      if (own) return human(own);
+      if (d.tagName && d.tagName.toLowerCase() === 'title' && clean(d.textContent)) return clean(d.textContent);
+      const href = d.getAttribute('href') || d.getAttribute('xlink:href');
+      if (d.tagName && d.tagName.toLowerCase() === 'use' && href) return human(href);
+      for (const k of (typeof d.className === 'string' ? d.className : (d.className && d.className.baseVal) || '').split(/\\s+/)) {
+        const m = iconClass.exec(k);
+        if (m && !/^(solid|regular|light|thin|duotone|brands|sharp|fw|lg|xs|sm|[0-9]x|spin)$/.test(m[1])) return human(m[1]);
+      }
+      const lig = d.tagName && ['i', 'span'].includes(d.tagName.toLowerCase()) && /icon/i.test(d.className || '') ? clean(d.textContent) : '';
+      if (lig && /^[a-z_]{3,30}$/.test(lig)) return human(lig);  // material-icons ligature text
+    }
+    return '';
+  };
+  const firstLine = (t, skip) => {
+    for (const line of String(t || '').split(/[\\n\\t]/)) {
+      const s = clean(line);
+      if (s && s !== skip && /[\\p{L}\\p{N}]/u.test(s)) return s.slice(0, 50);
+    }
+    return '';
+  };
+  const rowOf = e => {
+    const row = e.closest('tr,[role="row"],li,[role="listitem"],[role="option"],article');
+    if (row) return firstLine(row.innerText);
+    let n = e.parentElement;
+    for (let i = 0; n && n !== document.body && i < 5; i++, n = n.parentElement) {
+      const t = n.innerText || '';
+      if (t.length > 300) break;  // reached a container, not a row
+      const s = firstLine(t);
+      if (s) return s;
+    }
+    return '';
+  };
+  const out = {};
+  for (const id of ids) {
+    const e = c.nodes.get(id);
+    if (!e || !e.isConnected) continue;
+    const hp = e.getAttribute('aria-haspopup');
+    const what = attrOf(e) || iconOf(e) || (hp && hp !== 'false' ? 'menu' : '') ||
+      e.getAttribute('role') || e.tagName.toLowerCase();
+    const row = rowOf(e);
+    const label = clean(row && row.toLowerCase() !== what.toLowerCase() ? what + ' — ' + row : what).slice(0, 80);
+    if (label) out[id] = label;
+  }
+  return out;
+})"""
+
+_UPSTREAM_ROLES = {"button", "link", "checkbox", "radio", "switch", "tab", "menuitem",
+                   "menuitemradio", "option", "gridcell", "combobox", "textbox", "searchbox",
+                   "spinbutton"}
+
+
+def _blank_label(action: dict) -> bool:
+    """Upstream names an unlabeled control by its bare role; a glyph like "⋮" or "…" is no name either."""
+    label = (action.get("label") or "").strip()
+    return (label.casefold() in _UPSTREAM_ROLES or label.casefold() == (action.get("role") or "")
+            or not any(ch.isalnum() for ch in label))
+
+
+def _enrich_blank_labels(actions: list, node_key: str, evaluate) -> int:
+    """Give icon-only click/fill actions a semantic, row-disambiguated label (see _ICON_LABEL_FN).
+    `evaluate(expr)` runs JS in the frame that owns the nodes. Marks each synthesized label with
+    `synth_label` (the original stays in `raw_label`) so it's debuggable. Never raises."""
+    blank = [a for a in actions if a.get("kind") in ("click", "fill")
+             and isinstance(a.get(node_key), int) and _blank_label(a)]
+    if not blank:
+        return 0
+    try:
+        found = evaluate(f"{_ICON_LABEL_FN}({json.dumps(sorted({a[node_key] for a in blank}))})")
+    except Exception:
+        return 0  # never let labelling break a normal observe
+    if not isinstance(found, dict):
+        return 0
+    count = 0
+    for a in blank:
+        label = found.get(str(a[node_key]))
+        if isinstance(label, str) and label.strip() and not _blank_label({**a, "label": label}):
+            a["raw_label"], a["label"], a["synth_label"] = a.get("label", ""), label.strip()[:80], True
+            count += 1
+    return count
+
+
 def _is_upstream_stale(exc: BaseException) -> bool:
     return any(c.__name__ == "StalePage" for c in type(exc).__mro__)
 
@@ -262,6 +371,9 @@ class ChromeTarget:
             raise
         self._add_password_fields(page)
         self._add_overlay_actions(page)
+        n = _enrich_blank_labels(page.get("actions", []), "node", self.browser.evaluate)
+        if n and os.environ.get("JEV_DEBUG_IFRAME"):
+            _log.info("labels: synthesized %d top-frame label(s)", n)
         self._merge_iframe_actions(page)
         page["readable"] = True
         if self._grouping and _monotonic() - self._last_tab_ping > _TAB_ACTIVITY_EVERY:
@@ -297,6 +409,9 @@ class ChromeTarget:
                 continue
             self._frames[idx] = {"session": session_id, "origin": _origin(url)}
             raw = snap.get("actions", [])
+            synth = _enrich_blank_labels(raw, "node", lambda expr: self._frame_eval(session_id, expr))
+            if debug and synth:
+                _log.info("iframe[%d] synthesized %d label(s)", idx, synth)
             merged_count = 0
             for a in raw:
                 kind = a.get("kind")
@@ -321,7 +436,7 @@ class ChromeTarget:
                           "frame_node": a["node"], "kind": kind,
                           "label": a.get("label", ""), "role": a.get("role", ""),
                           "value": a.get("value", ""), "frame": idx}
-                for key in ("checked", "selected", "expanded"):
+                for key in ("checked", "selected", "expanded", "synth_label", "raw_label"):
                     if key in a:
                         merged[key] = a[key]
                 actions.append(merged)
@@ -353,6 +468,14 @@ class ChromeTarget:
             return None
         value = (res.get("result") or {}).get("value")
         return value if isinstance(value, dict) else None
+
+    @staticmethod
+    def _frame_eval(session_id, expression):
+        res = _cdp("Runtime.evaluate", session_id=session_id, expression=expression,
+                   returnByValue=True)
+        if res.get("exceptionDetails"):
+            return None
+        return (res.get("result") or {}).get("value")
 
     def _add_overlay_actions(self, page: dict) -> None:
         try:
