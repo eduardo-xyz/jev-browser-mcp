@@ -341,6 +341,65 @@ _ICON_CONTROLS_JS = """(() => {
 })()"""
 
 
+# Clickable text that isn't a control: list/table rows and folder names rendered as a <div>/<span>/<td>
+# with a JS click handler (cursor: pointer) and no link/button/role. Upstream's selector skips them,
+# so a goal like "open the folder X" finds nothing to click and the model blocks or types into the
+# search box. Walk visible text nodes, keep one whose element shows a pointer cursor and isn't inside
+# a real control, find where the pointer starts (cursor is inherited: climb while the parent is
+# pointer), skip page-sized wrappers, keep the first text per clickable root, and register the
+# text's element (its centre is inside the root, so a click there reaches the root's handler).
+_POINTER_TEXT_JS = """(() => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes || !document.body) return [];
+  const CONTROL = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],' + ['button', 'link',
+    'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemradio', 'menuitemcheckbox', 'option',
+    'gridcell', 'combobox', 'textbox', 'searchbox', 'spinbutton'].map(r => '[role="' + r + '"]').join(',');
+  const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
+  const pointer = e => e && e.nodeType === 1 && getComputedStyle(e).cursor === 'pointer';
+  const out = [], roots = new Set(), base = 4000000, area = innerWidth * innerHeight;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node, scanned = 0;
+  while ((node = walker.nextNode()) && out.length < 60 && ++scanned < 4000) {
+    const t = node.textContent.trim();
+    if (!t || !/[\\p{L}\\p{N}]/u.test(t)) continue;
+    const p = node.parentElement;
+    if (!p || p.closest('script,style,noscript,template') || !pointer(p) || p.closest(CONTROL)) continue;
+    let root = p;
+    for (let i = 0; i < 12 && root.parentElement && root.parentElement !== document.body && pointer(root.parentElement); i++)
+      root = root.parentElement;
+    if (roots.has(root) || root === document.body || root === document.documentElement) continue;
+    const rr = root.getBoundingClientRect();
+    if (rr.width * rr.height > area / 2) continue;  // a page-sized pointer wrapper, not a row
+    if (!vis(p)) continue;
+    const r = p.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !root.contains(hit)) continue;  // covered by something else
+    const label = (p.innerText || t).trim().replace(/\\s+/g, ' ').slice(0, 80);
+    if (!label || !/[\\p{L}\\p{N}]/u.test(label)) continue;
+    roots.add(root);
+    const id = base + out.length;
+    c.nodes.set(id, p);
+    out.push({node: id, label, guard: c.guard ? c.guard(p) : null});
+  }
+  return out;
+})()"""
+
+
+def _pointer_text_actions(found, labels: set, prefix: str = "tx") -> list:
+    """Actions for discovered clickable text, skipping labels already offered (each label once)."""
+    out = []
+    for i, f in enumerate(found if isinstance(found, list) else []):
+        label = f.get("label") if isinstance(f, dict) else None
+        if not isinstance(label, str) or not label.strip() or label in labels \
+                or not isinstance(f.get("node"), int):
+            continue
+        labels.add(label)
+        out.append({"id": f"{prefix}{i + 1}", "node": f["node"], "kind": "click", "label": label,
+                    "role": "button", "value": "", "_guard": f.get("guard")})
+    return out
+
+
 def _icon_control_actions(found, prefix: str) -> list:
     """Actions for discovered icon controls (blank label: _enrich_blank_labels names them)."""
     if not isinstance(found, list):
@@ -448,6 +507,7 @@ class ChromeTarget:
         self._add_password_fields(page)
         self._add_overlay_actions(page)
         self._add_icon_controls(page)
+        self._add_pointer_text(page)
         n = _enrich_blank_labels(page.get("actions", []), "node", self.browser.evaluate)
         self._drop_unnamed_icons(page.get("actions", []))
         if n and os.environ.get("JEV_DEBUG_IFRAME"):
@@ -492,8 +552,16 @@ class ChromeTarget:
                 icons = []  # never let icon discovery break a normal observe
             for a in icons:
                 a.pop("_guard", None)  # in-frame act resolves by node; no upstream freshness check
+            labels = {a.get("label") for a in snap.get("actions", [])}
             raw = list(snap.get("actions", [])) + icons + self._frame_overlay_actions(
-                session_id, {a.get("label") for a in snap.get("actions", [])})
+                session_id, labels)
+            try:
+                texts = _pointer_text_actions(self._frame_eval(session_id, _POINTER_TEXT_JS), labels)
+            except Exception:
+                texts = []  # never let discovery break a normal observe
+            for a in texts:
+                a.pop("_guard", None)  # in-frame act resolves by node; no upstream freshness check
+            raw += texts
             synth = _enrich_blank_labels(raw, "node", lambda expr: self._frame_eval(session_id, expr))
             self._drop_unnamed_icons(raw)
             if debug and synth:
@@ -588,6 +656,16 @@ class ChromeTarget:
             return  # never let icon discovery break a normal observe
         actions = page.setdefault("actions", [])
         for a in _icon_control_actions(found, "ic"):
+            _record_guard(page, {"node": a["node"], "guard": a.pop("_guard")})
+            actions.append(a)
+
+    def _add_pointer_text(self, page: dict) -> None:
+        try:
+            found = self.browser.evaluate(_POINTER_TEXT_JS)
+        except Exception:
+            return  # never let discovery break a normal observe
+        actions = page.setdefault("actions", [])
+        for a in _pointer_text_actions(found, {x.get("label") for x in actions}):
             _record_guard(page, {"node": a["node"], "guard": a.pop("_guard")})
             actions.append(a)
 

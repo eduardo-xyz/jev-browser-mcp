@@ -716,3 +716,52 @@ def test_iframe_overlay_menu_items_merged_and_deduped(monkeypatch):
     acts = {a["id"]: a for a in t.observe()["actions"] if a.get("frame")}
     assert set(acts) == {"f1e1", "f1ov2"}  # "Edit" already offered by upstream: not duplicated
     assert acts["f1ov2"]["label"] == "Delete" and acts["f1ov2"]["frame_node"] == 2000001
+
+
+def test_pointer_text_rows_become_guarded_click_actions():
+    # a folder row is a <div style="cursor:pointer">Old Leads</div>: not in upstream's selector,
+    # so discovery offers it as a named click (guard recorded, labels already offered skipped)
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    g = [4000000, None, "Old Leads", None]
+    def ev(expr):
+        if "createTreeWalker" in expr and "4000000" in expr:
+            return [{"node": 4000000, "label": "Old Leads", "guard": g},
+                    {"node": 4000001, "label": "hi", "guard": None}]
+        return []
+    f.browsers[0].evaluate = ev
+    f.browsers[0].observe = lambda screenshot=False: {"url": "u", "text": "", "actions": [
+        {"id": "e1", "node": 1, "kind": "click", "label": "hi", "role": "link"}]}
+    page = t.observe()
+    tx = [a for a in page["actions"] if a["id"].startswith("tx")]
+    assert [(a["id"], a["label"], a["kind"]) for a in tx] == [("tx1", "Old Leads", "click")]
+    assert page["guards"]["4000000"] == g
+    assert all("_guard" not in a for a in page["actions"])
+
+
+def test_iframe_pointer_text_rows_merged(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: []
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
+        {"id": "e1", "node": 4, "kind": "click", "label": "Home", "role": "link"}]})
+    def frame_eval(sid, expr):
+        if "createTreeWalker" in expr and "4000000" in expr:
+            return [{"node": 4000000, "label": "Home"}, {"node": 4000001, "label": "Status Tiggers"}]
+        return []
+    monkeypatch.setattr(t, "_frame_eval", frame_eval)
+    acts = {a["id"]: a for a in t.observe()["actions"] if a.get("frame")}
+    assert set(acts) == {"f1e1", "f1tx2"}
+    assert acts["f1tx2"]["label"] == "Status Tiggers" and acts["f1tx2"]["frame_node"] == 4000001
+
+
+def test_pointer_text_discovery_failure_never_breaks_observe():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    def ev(expr):
+        if "createTreeWalker" in expr and "4000000" in expr:
+            raise RuntimeError("boom")
+        return []
+    f.browsers[0].evaluate = ev
+    assert t.observe()["readable"] is True
