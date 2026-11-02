@@ -645,3 +645,19 @@ def test_synthesized_label_never_turns_row_text_into_money_or_send():
     a = {"kind": "click", "label": "menu — Send", "node": 1}
     assert not is_send_action(a, Config())
     assert not is_money_action({**a, "label": "menu — Pay now"}, {}, {}, Config())
+
+
+def test_overlay_action_records_guard_so_upstream_fresh_accepts_it():
+    # upstream fresh(): current == [page_key, page["guards"].get(str(node))]. An injected overlay
+    # node with no recorded guard compares None against a list and every click is refused stale.
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    g = [2000000, "button", "Not now", None]
+    b.evaluate = lambda expr: ([{"node": 2000000, "label": "Not now", "guard": g}]
+                               if "aria-modal" in expr else [])
+    page = t.observe()
+    assert page["guards"]["2000000"] == g
+    ov = next(a for a in page["actions"] if a["id"] == "ov1")
+    current = [page.get("page_key"), g]  # what upstream reads back for an unchanged element
+    assert current == [page.get("page_key"), page["guards"].get(str(ov["node"]))]

@@ -168,7 +168,7 @@ _OVERLAY_JS = """(() => {
     seen.add(label);
     const id = base + out.length;
     c.nodes.set(id, e);
-    out.push({node: id, label});
+    out.push({node: id, label, guard: c.guard ? c.guard(e) : null});
   }
   return out.slice(0, 20);
 })()"""
@@ -281,6 +281,15 @@ def _enrich_blank_labels(actions: list, node_key: str, evaluate) -> int:
             a["raw_label"], a["label"], a["synth_label"] = a.get("label", ""), label.strip()[:80], True
             count += 1
     return count
+
+
+def _record_guard(page: dict, found: dict) -> None:
+    """Upstream's click freshness check compares the element's current guard with
+    page["guards"][node], which only holds upstream's own actions. A node we inject must have its
+    observe-time guard recorded too, or every click on it is refused as stale (and a real change
+    to it must still be caught, so we record the real guard, never a wildcard)."""
+    if isinstance(found.get("guard"), list):
+        page.setdefault("guards", {})[str(found["node"])] = found["guard"]
 
 
 def _is_upstream_stale(exc: BaseException) -> bool:
@@ -493,6 +502,7 @@ class ChromeTarget:
             actions.append({"id": f"ov{i + 1}", "node": f["node"], "kind": "click",
                             "label": label, "role": "button", "value": ""})
             existing.add(label)
+            _record_guard(page, f)
 
     def _add_password_fields(self, page: dict) -> None:
         try:
