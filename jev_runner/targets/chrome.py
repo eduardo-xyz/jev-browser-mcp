@@ -239,8 +239,9 @@ _ICON_LABEL_FN = """((ids) => {
     const e = c.nodes.get(id);
     if (!e || !e.isConnected) continue;
     const hp = e.getAttribute('aria-haspopup');
+    const tag = e.tagName.toLowerCase();
     const what = attrOf(e) || iconOf(e) || (hp && hp !== 'false' ? 'menu' : '') ||
-      e.getAttribute('role') || e.tagName.toLowerCase();
+      e.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : 'icon');
     const row = rowOf(e);
     const label = clean(row && row.toLowerCase() !== what.toLowerCase() ? what + ' — ' + row : what).slice(0, 80);
     if (label) out[id] = label;
@@ -281,6 +282,52 @@ def _enrich_blank_labels(actions: list, node_key: str, evaluate) -> int:
             a["raw_label"], a["label"], a["synth_label"] = a.get("label", ""), label.strip()[:80], True
             count += 1
     return count
+
+
+# Icon controls that aren't buttons at all: a <div>/<span> with a click handler around an SVG or
+# icon font (a row's 3-dot menu often is). Upstream's selector only takes real controls/roles, so
+# these never become actions. Find small pointer-cursor (or onclick/tabindex) wrappers of an icon
+# with no text of their own, outside any upstream control, visible and on top at their centre;
+# register them in upstream's node map (high ids, no collision) with their freshness guard. Bounded.
+_ICON_CONTROLS_JS = """(() => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes) return [];
+  const CONTROL = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],[role]';
+  const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
+  const small = r => r.width >= 8 && r.height >= 8 && r.width <= 64 && r.height <= 64;
+  const clicky = e => e.hasAttribute('onclick') || (e.tabIndex >= 0 && e.hasAttribute('tabindex')) ||
+    getComputedStyle(e).cursor === 'pointer';
+  const out = [], seen = new Set(), base = 3000000;
+  for (const icon of document.querySelectorAll('svg,i,img,[class*="icon"]')) {
+    if (out.length >= 40) break;
+    let best = null;
+    for (let n = icon, i = 0; n && n !== document.body && i < 4; n = n.parentElement, i++) {
+      const r = n.getBoundingClientRect();
+      if (!small(r)) break;
+      if (clicky(n)) best = n;  // keep climbing: the outermost small clickable wrapper is the control
+    }
+    if (!best || seen.has(best)) continue;
+    seen.add(best);
+    if (best.closest(CONTROL) || best.querySelector(CONTROL) || !vis(best)) continue;
+    if ((best.innerText || '').replace(/[^\\p{L}\\p{N}]/gu, '').length > 0) continue;  // has a text name: not icon-only
+    const r = best.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    if (!best.contains(document.elementFromPoint(x, y))) continue;
+    const id = base + out.length;
+    c.nodes.set(id, best);
+    out.push({node: id, guard: c.guard ? c.guard(best) : null});
+  }
+  return out;
+})()"""
+
+
+def _icon_control_actions(found, prefix: str) -> list:
+    """Actions for discovered icon controls (blank label: _enrich_blank_labels names them)."""
+    if not isinstance(found, list):
+        return []
+    return [{"id": f"{prefix}{i + 1}", "node": f["node"], "kind": "click", "label": "",
+             "role": "button", "value": "", "_guard": f.get("guard"), "_icon": True}
+            for i, f in enumerate(found) if isinstance(f, dict) and isinstance(f.get("node"), int)]
 
 
 def _record_guard(page: dict, found: dict) -> None:
@@ -380,7 +427,9 @@ class ChromeTarget:
             raise
         self._add_password_fields(page)
         self._add_overlay_actions(page)
+        self._add_icon_controls(page)
         n = _enrich_blank_labels(page.get("actions", []), "node", self.browser.evaluate)
+        self._drop_unnamed_icons(page.get("actions", []))
         if n and os.environ.get("JEV_DEBUG_IFRAME"):
             _log.info("labels: synthesized %d top-frame label(s)", n)
         self._merge_iframe_actions(page)
@@ -417,8 +466,15 @@ class ChromeTarget:
                 self._detach(session_id)
                 continue
             self._frames[idx] = {"session": session_id, "origin": _origin(url)}
-            raw = snap.get("actions", [])
+            try:
+                icons = _icon_control_actions(self._frame_eval(session_id, _ICON_CONTROLS_JS), "ic")
+            except Exception:
+                icons = []  # never let icon discovery break a normal observe
+            for a in icons:
+                a.pop("_guard", None)  # in-frame act resolves by node; no upstream freshness check
+            raw = list(snap.get("actions", [])) + icons
             synth = _enrich_blank_labels(raw, "node", lambda expr: self._frame_eval(session_id, expr))
+            self._drop_unnamed_icons(raw)
             if debug and synth:
                 _log.info("iframe[%d] synthesized %d label(s)", idx, synth)
             merged_count = 0
@@ -503,6 +559,23 @@ class ChromeTarget:
                             "label": label, "role": "button", "value": ""})
             existing.add(label)
             _record_guard(page, f)
+
+    def _add_icon_controls(self, page: dict) -> None:
+        try:
+            found = self.browser.evaluate(_ICON_CONTROLS_JS)
+        except Exception:
+            return  # never let icon discovery break a normal observe
+        actions = page.setdefault("actions", [])
+        for a in _icon_control_actions(found, "ic"):
+            _record_guard(page, {"node": a["node"], "guard": a.pop("_guard")})
+            actions.append(a)
+
+    @staticmethod
+    def _drop_unnamed_icons(actions: list) -> None:
+        """A discovered icon that labelling couldn't name is noise the model can't target."""
+        actions[:] = [a for a in actions if not (a.get("_icon") and not a.get("synth_label"))]
+        for a in actions:
+            a.pop("_icon", None)
 
     def _add_password_fields(self, page: dict) -> None:
         try:

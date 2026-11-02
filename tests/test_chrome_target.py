@@ -599,7 +599,9 @@ def test_iframe_icon_button_gets_row_disambiguated_label(monkeypatch):
     assert by_id["f1e1"]["synth_label"] is True and by_id["f1e1"]["raw_label"] == "button"
     assert by_id["f1e3"]["label"] == "Create workflow" and "synth_label" not in by_id["f1e3"]
     # only blank nodes are asked about, in the frame's own session, by their in-frame node id
-    assert len(evals) == 1 and evals[0][0] == "S1" and evals[0][1].endswith("([7, 8])")
+    label_evals = [e for e in evals if "rowOf" in e[1]]
+    assert len(label_evals) == 1 and label_evals[0][0] == "S1"
+    assert label_evals[0][1].endswith("([7, 8])")
 
 
 def test_top_frame_blank_label_enriched_and_labelled_kept():
@@ -661,3 +663,39 @@ def test_overlay_action_records_guard_so_upstream_fresh_accepts_it():
     ov = next(a for a in page["actions"] if a["id"] == "ov1")
     current = [page.get("page_key"), g]  # what upstream reads back for an unchanged element
     assert current == [page.get("page_key"), page["guards"].get(str(ov["node"]))]
+
+
+def test_div_icon_controls_become_labelled_guarded_actions():
+    # a <div onclick><svg/></div> row menu isn't in upstream's selector at all: discovery
+    # registers it (high id + guard), labelling names it, an unnameable one is dropped
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    g = [3000000, None, "", None]
+    def ev(expr):
+        if "svg,i,img" in expr:  # icon discovery
+            return [{"node": 3000000, "guard": g}, {"node": 3000001, "guard": g}]
+        if "rowOf" in expr:
+            return {"3000000": "dots vertical — Allen Brothers"}
+        return []
+    f.browsers[0].evaluate = ev
+    page = t.observe()
+    icons = [a for a in page["actions"] if a["id"].startswith("ic")]
+    assert [(a["id"], a["label"]) for a in icons] == [("ic1", "dots vertical — Allen Brothers")]
+    assert page["guards"]["3000000"] == g
+    assert all("_icon" not in a and "_guard" not in a for a in page["actions"])
+
+
+def test_iframe_div_icon_controls_merged(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: []
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": []})
+    def frame_eval(sid, expr):
+        if "svg,i,img" in expr:
+            return [{"node": 3000000, "guard": None}]
+        return {"3000000": "dots vertical — Comox Valley"}
+    monkeypatch.setattr(t, "_frame_eval", frame_eval)
+    acts = [a for a in t.observe()["actions"] if a.get("frame")]
+    assert [(a["id"], a["label"], a["frame_node"]) for a in acts] == [
+        ("f1ic1", "dots vertical — Comox Valley", 3000000)]
