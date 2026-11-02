@@ -86,6 +86,7 @@ to its goal/app and feeds them to Jev as hints — so writing a good lesson once
 | `blocked` | Could not continue (`reason`, e.g. `jev_blocked`, `screen_unreadable`, `missing_value`, `stuck_in_loop`). | `screen_unreadable` right after opening an app: wait 3 s and run again with the same `session_id`. `missing_value`: put the exact text in the goal. `stuck_in_loop`: Jev kept repeating the same tap on the same screen (e.g. opening the wrong account, going back, opening it again) — don't just retry; make the goal name the exact target ("open the account ending 0743", "tap exactly …") or `screenshot` to see where it's stuck. |
 | `paused_needs_input` | A password/PIN/code field (`field`). | `resume(session_id, input=<value>)`. Never write the value anywhere else. |
 | `paused_mismatch` | A money button, and the amount/recipient did not both match the screen (`expected` vs `seen`), or a second money action in one run. | Check `expected`/`seen` and a `screenshot`. Approve with `resume(session_id, confirm=True)` only if it is exactly the intended payment. |
+| `paused_confirm` | A destructive control (Delete/Remove/Eliminar/Trash…, named in `control`). Every such click pauses; `reason` is `destructive_action`, or `destructive_already_attempted` if this run already deleted something (a row-menu Delete plus its dialog's Delete is two confirms). | `screenshot` and check it is exactly the record to delete. Approve with `resume(session_id, confirm=True)` only with the human's OK. If the screen changed meanwhile it re-pauses instead of clicking. |
 | `error` `money_action_uncertain` | A money tap may or may not have gone through. | Do NOT retry. Check the bank app's movements, then `end_session`. |
 | `error` other | Provider/device problem (e.g. HTTP 529 = Jev overloaded). | Retry once after a few seconds. |
 
@@ -116,6 +117,7 @@ cards in some bank apps need.)
 - One money action per run. Do each transfer as its own `run_task`.
 - Eduardo has authorised Smart-Bot to approve `paused_mismatch` itself. Approve only when
   `expected` matches the intended transfer and the screenshot shows the right accounts.
+  That authorisation does **not** cover `paused_confirm` (deletes): those need the human.
 
 ## Writing goals that work (learned on the real tablet)
 

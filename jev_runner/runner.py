@@ -25,6 +25,7 @@ from .flows import (
 from .guards import (
     _amount_seen,
     check_money,
+    is_destructive_action,
     is_money_action,
     is_secret_field,
     is_send_action,
@@ -136,6 +137,7 @@ class Runner:
         self.executed_money = False  # never reset once True: the receipt must survive
         self.money_attempted = False  # one autonomous money action per run; never reset
         self.sent_attempted = False  # one message/forward send per run; never reset
+        self.destructive_attempted = False  # a confirmed delete happened in this run; never reset
         self._money_uncertain = False  # terminal: the session must be ended
         self.receipt: dict | None = None
         self._started = time.perf_counter()
@@ -165,7 +167,7 @@ class Runner:
             return self.run()
         if pending["type"] == "secret" and not input:
             return result.build(self)
-        if pending["type"] == "money" and not confirm:
+        if pending["type"] in ("money", "destructive") and not confirm:
             return result.build(self)
         return self._drive(lambda: self._resume_pending(pending, input))
 
@@ -230,7 +232,8 @@ class Runner:
         return flow
 
     def _resume_pending(self, pending: dict, input: str | None):
-        status = "paused_needs_input" if pending["type"] == "secret" else "paused_mismatch"
+        status = {"secret": "paused_needs_input",
+                  "destructive": "paused_confirm"}.get(pending["type"], "paused_mismatch")
         self.page = {}  # force a real re-observe: the screen may have moved while paused
         page = self._observe()
         same_screen = page.get("fingerprint") == pending["fingerprint"]
@@ -242,7 +245,7 @@ class Runner:
                 found = find_by_locator(page, pending["locator"])
         else:
             found = find_by_locator(page, pending["locator"])
-        if pending["type"] == "money":
+        if pending["type"] in ("money", "destructive"):
             found = [a for a in found if a.get("label") == pending["label"]]
         if not found:
             raise _Stop(status, "pending_element_missing")
@@ -251,6 +254,17 @@ class Runner:
         action = found[0]
         if pending["type"] == "secret":
             self._execute(action, page, input, verify=True, secret=True)
+            self.pending = None
+            return
+        if pending["type"] == "destructive":
+            if not (same_screen and self._text_hash(page) == pending["text_hash"]):
+                # Screen changed since the human looked at it: their confirm no longer applies.
+                self._guard_destructive(action, page)
+            try:
+                self._execute(action, page, None, verify=True, destructive=True)
+            except StalePage:
+                self.page = {}  # refused before tapping: nothing deleted; keep waiting
+                raise _Stop("paused_confirm", "screen_changed")
             self.pending = None
             return
         try:
@@ -487,6 +501,17 @@ class Runner:
             seen=scrub_value(check.seen, self.secrets))
         raise _Stop("paused_mismatch", "money_already_attempted" if self.money_attempted else None)
 
+    def _guard_destructive(self, action: dict, page: dict):
+        """Never delete on Jev's say-so: pause on a settled screen for resume(confirm=True).
+        Every destructive click pauses (a delete plus its confirm dialog is two confirms).
+        Its own status, not paused_mismatch, so a standing money approval never covers a delete."""
+        page, action = self._settled(page, action)
+        self.pending = self._pending_for("destructive", action, page,
+                                         text_hash=self._text_hash(page),
+                                         control=scrub_text(action.get("label") or "", self.secrets))
+        raise _Stop("paused_confirm", "destructive_already_attempted"
+                    if self.destructive_attempted else "destructive_action")
+
     def _changed(self, before: dict, after: dict) -> bool:
         return (after.get("fingerprint") != before.get("fingerprint")
                 or self._text_hash(after) != self._text_hash(before))
@@ -581,7 +606,7 @@ class Runner:
         return ok
 
     def _dispatch(self, action: dict, page: dict, text_for):
-        """Shared by Jev-chosen and replayed actions: secret and money guards first."""
+        """Shared by Jev-chosen and replayed actions: secret, money and destructive guards first."""
         if self._is_secret(action):
             # Secrets never go to the text model: ask the human instead.
             self.pending = self._pending_for("secret", action, page,
@@ -591,6 +616,8 @@ class Runner:
         if is_money_action(action, page, money_params, self.cfg):
             self._guard_money(action, page, money_params)
             return
+        if is_destructive_action(action, self.cfg):
+            self._guard_destructive(action, page)
         text = text_for() if action["kind"] == "fill" else None
         if is_send_action(action, self.cfg):
             # One send per run, and never the tap-retry path: a forward returns to a
@@ -632,9 +659,11 @@ class Runner:
 
     def _execute(self, action: dict, page: dict, text: str | None, *,
                  verify: bool = False, secret: bool = False, money: bool = False,
-                 send: bool = False):
+                 send: bool = False, destructive: bool = False):
         if send:
             self.sent_attempted = True  # mark before acting: a duplicate must never slip in
+        if destructive:
+            self.destructive_attempted = True
         if secret and text:
             self.secrets.append(text)  # before acting, so even a target error is scrubbed
         if money:
@@ -674,7 +703,7 @@ class Runner:
         except StalePage:
             self.page = {}
             return
-        if not money and not send and not self._changed(page, after) \
+        if not money and not send and not destructive and not self._changed(page, after) \
                 and may_retry_tap(action, self.cfg) and hasattr(self.target, "press"):
             # Some web views ignore a quick tap; look again, then press and hold briefly once.
             time.sleep(self.settle_delay * 2)

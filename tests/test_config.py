@@ -6,7 +6,7 @@ import pytest
 from jev_runner import config
 
 LIST_KEYS = ["money_apps", "money_labels", "money_labels_contextual",
-             "money_exclude_words", "secret_patterns", "own_accounts"]
+             "money_exclude_words", "secret_patterns", "own_accounts", "destructive_labels"]
 
 
 def _write(text):

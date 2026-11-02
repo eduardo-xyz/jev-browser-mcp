@@ -47,7 +47,7 @@ def _label_matches(label: str, labels: list[str]) -> bool:
 
 def may_retry_tap(action: dict, cfg: Config) -> bool:
     """A tap that changed nothing may be repeated as a press only when repeating can't hurt:
-    never a money or send/confirm label, a checkbox/switch, or a text field.
+    never a money, send/confirm or destructive label, a checkbox/switch, or a text field.
     Navigation labels are allowed even when they share a money-label prefix
     (e.g. "Transferir dinero" vs strong label "Transferir")."""
     if action.get("kind") != "click" or "checked" in action:
@@ -57,7 +57,8 @@ def may_retry_tap(action: dict, cfg: Config) -> bool:
         return True
     return not (_label_matches(label, cfg.money_labels)
                 or _label_matches(label, cfg.money_labels_contextual)
-                or _label_matches(label, cfg.send_labels))
+                or _label_matches(label, cfg.send_labels)
+                or _label_matches(label, cfg.destructive_labels))
 
 
 def is_send_action(action: dict, cfg: Config) -> bool:
@@ -70,6 +71,18 @@ def is_send_action(action: dict, cfg: Config) -> bool:
     if _label_matches(label, cfg.navigation_labels):
         return False
     return _label_matches(label, cfg.send_labels)
+
+
+def is_destructive_action(action: dict, cfg: Config) -> bool:
+    """A tap that destroys records (Delete/Remove/Eliminar). Always paused for an explicit human
+    confirm and never tap-retried, so a mis-aimed click next to Delete can't lose data.
+    A synthesized icon label ("delete — <row>") matches too: the icon name leads it."""
+    if action.get("kind") != "click":
+        return False
+    label = normalize(action.get("label") or "")
+    if _label_matches(label, cfg.navigation_labels):
+        return False
+    return _label_matches(label, cfg.destructive_labels)
 
 
 def is_money_action(action: dict, page: dict, money_params: dict, cfg: Config) -> bool:

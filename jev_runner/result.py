@@ -21,7 +21,7 @@ def build(runner) -> dict:
     }
     if runner.reason:
         out["reason"] = runner.reason
-    for key in ("field", "expected", "seen"):
+    for key in ("field", "expected", "seen", "control"):
         if runner.pending and key in runner.pending:
             out[key] = runner.pending[key]
     if runner.receipt:

@@ -551,3 +551,47 @@ def test_password_fill_on_unchanging_screen_is_not_no_progress(cfg):
     assert out["status"] == "paused_needs_input"
     out = r.resume(input="hunter2pass")
     assert out["status"] == "done", out
+
+
+def test_delete_click_pauses_until_confirmed(cfg):
+    t = FakeTarget([page(click("d1", "Delete"), text="Workflow: Lead Nurture"), page()])
+    r = Runner("s", t, "delete it", None, cfg, choose=scripted_choose(["d1", "DONE"]))
+    out = r.run()
+    # its own status: a standing approval for paused_mismatch (money) never covers a delete
+    assert (out["status"], out["reason"]) == ("paused_confirm", "destructive_action")
+    assert out["control"] == "Delete" and t.acted == []
+    assert r.resume()["status"] == "paused_confirm" and t.acted == []  # no confirm, no tap
+    out = r.resume(confirm=True)
+    assert out["status"] == "done" and t.acted == [("d1", None)] and t.verified == ["d1"]
+
+
+def test_every_destructive_click_pauses_and_reports_prior_delete(cfg):
+    # row-menu "Delete" then the dialog's "Delete": each is its own confirm
+    t = FakeTarget([page(click("d1", "Delete")), page(click("d2", "Delete workflow")), page()])
+    r = Runner("s", t, "delete it", None, cfg, choose=scripted_choose(["d1", "d2", "DONE"]))
+    assert r.run()["status"] == "paused_confirm"
+    out = r.resume(confirm=True)
+    assert (out["status"], out["reason"]) == ("paused_confirm", "destructive_already_attempted")
+    assert t.acted == [("d1", None)]
+    assert r.resume(confirm=True)["status"] == "done"
+    assert [a for a, _ in t.acted] == ["d1", "d2"]
+
+
+def test_destructive_confirm_void_if_screen_changed(cfg):
+    paused = page(click("d1", "Delete"), text="Row A")
+    moved = page(click("d1", "Delete"), text="Row B")  # same control, different screen
+    t = FakeTarget([paused, moved])
+    r = Runner("s", t, "delete A", None, cfg, choose=scripted_choose(["d1"]))
+    assert r.run()["status"] == "paused_confirm"
+    t.i = 1  # the page moved while the human was looking at the first screen
+    out = r.resume(confirm=True)
+    assert out["status"] == "paused_confirm" and t.acted == []  # re-paused, not deleted
+
+
+def test_destructive_pending_keeps_the_guarded_label(cfg):
+    from jev_runner.guards import is_destructive_action
+    t = FakeTarget([page(click("d1", "Eliminar")), page()])
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["d1", "DONE"]))
+    assert r.run()["status"] == "paused_confirm" and t.acted == []
+    assert r.pending["type"] == "destructive" and is_destructive_action(
+        {"kind": "click", "label": r.pending["label"]}, cfg)

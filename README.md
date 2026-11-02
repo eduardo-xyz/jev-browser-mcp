@@ -31,7 +31,9 @@ keys). Set the keys, then restart `jevd` so it picks them up.
 
 Usage rules: one `run_task` call per goal. Statuses: `paused_needs_input` means ask the user
 and call `resume(input=...)`; `paused_mismatch` means show `expected`/`seen` and call
-`resume(confirm=True)` only after the user approves; `error` with reason
+`resume(confirm=True)` only after the user approves; `paused_confirm` means a destructive
+control (Delete/Remove/Eliminar, named in `control`) is about to be clicked -- check a
+`screenshot` and call `resume(confirm=True)` only after the user approves; `error` with reason
 `money_action_uncertain` is terminal -- have the user check the app manually, then
 `end_session`. A `device_busy` error names the session holding the device.
 

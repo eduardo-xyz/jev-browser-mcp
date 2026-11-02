@@ -65,6 +65,13 @@ class Config:
     send_labels: list[str] = field(default_factory=lambda: [
         "Send", "Enviar", "Enviar mensaje",
     ])
+    # Labels of a control that destroys records (delete/remove/trash). Every such click pauses
+    # for an explicit resume(confirm=True) and is never tap-retried, so a mis-aimed click can't
+    # delete. Kept tight on purpose: "Archive"/"Cancel" are not here. Generic verbs only.
+    destructive_labels: list[str] = field(default_factory=lambda: [
+        "Delete", "Eliminar", "Borrar", "Remove", "Quitar", "Trash", "Move to trash",
+        "Delete permanently", "Eliminar permanentemente",
+    ])
     session_ttl_s: int = 900
     reconnect_window_s: int = 30
     data_dir: Path = field(default_factory=data_dir)
@@ -72,7 +79,7 @@ class Config:
 
 LIST_FIELDS = ("money_apps", "money_labels", "money_labels_contextual",
                "money_exclude_words", "secret_patterns", "own_accounts", "navigation_labels",
-               "send_labels")
+               "send_labels", "destructive_labels")
 
 
 def load() -> Config:

@@ -230,3 +230,22 @@ def test_web_checkout_labels_are_guarded_everywhere():
     # plain navigation stays unguarded
     for label in ["Proceed to checkout", "Checkout", "Add to cart", "Continue shopping"]:
         assert not is_money_action(click(label), anywhere, {}, cfg), label
+
+
+def test_is_destructive_action_detects_delete_labels():
+    from jev_runner.guards import is_destructive_action
+    cfg = Config()
+    click = lambda label: {"kind": "click", "label": label}
+    for label in ["Delete", "Eliminar", "BORRAR", "Remove", "Move to trash", "Delete workflow",
+                  "Eliminar permanentemente", "trash — Allen Brothers"]:
+        assert is_destructive_action(click(label), cfg), label
+    for label in ["Archive", "Cancel", "Edit", "menu — Delete old leads"]:
+        assert not is_destructive_action(click(label), cfg), label
+    assert not is_destructive_action({"kind": "fill", "label": "Delete"}, cfg)
+    assert not is_destructive_action(click("Eliminar"), Config(navigation_labels=["Eliminar"]))
+
+
+def test_destructive_label_is_never_tap_retried():
+    cfg = Config()
+    for label in ["Delete", "Eliminar", "Remove", "delete — Allen Brothers"]:
+        assert not may_retry_tap({"kind": "click", "label": label}, cfg), label

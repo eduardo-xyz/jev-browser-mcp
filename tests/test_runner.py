@@ -356,3 +356,11 @@ def test_wait_action_dropped_after_cap_forces_decision(cfg):
     # first MAX_WAITS views still offered wait; the one that forced DONE had no wait action
     assert any("wait" not in ks for ks in seen_actions)
     assert sum(1 for h in r.history if h["kind"] == "wait") == 3
+
+
+def test_no_press_retry_for_destructive(cfg):
+    t = _PressTarget([page(click("n0", "Delete")), page()], deaf={"n0"})
+    r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n0", "DONE"]), learn=False)
+    assert r.run()["status"] == "paused_confirm"
+    r.resume(confirm=True)
+    assert t.pressed == []
