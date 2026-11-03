@@ -1,5 +1,6 @@
 """AndroidTarget: reads the screen and drives input through a persistent uiautomator2 session."""
 import re
+import shlex
 from pathlib import Path
 from time import monotonic, sleep
 
@@ -12,6 +13,22 @@ _LAUNCHER_CMD = (
     "-c android.intent.category.LAUNCHER"
 )
 _COMPONENT = re.compile(r"^(\S+?)/\S+$")
+
+
+def adb_input_text_arg(text: str) -> str | None:
+    """Shell-safe argument for ``adb shell input text``, or ``None`` when the value can't be typed
+    exactly this way and the caller should fall back to ``send_keys``.
+
+    This path types secure-field values (passwords/codes), so correctness matters. Spaces are
+    encoded as ``%s`` (``input text``'s own convention), and the whole argument is shell-quoted so
+    no metacharacter can break out of it — a password like ``a&b; rm -rf /`` is typed verbatim,
+    never executed or word-split. A literal ``%`` is ambiguous with the ``%s`` space encoding, so
+    such text returns ``None`` to force the clipboard-free ``send_keys`` fallback rather than risk
+    typing the wrong secret."""
+    text = text or ""
+    if "%" in text:
+        return None
+    return shlex.quote(text.replace(" ", "%s"))
 
 
 def _connection_errors() -> tuple[type[BaseException], ...]:
@@ -248,13 +265,16 @@ class AndroidTarget:
                     elif _try_set(d(focused=True)):
                         typed = True
                     if not typed:
-                        # Shell input text avoids the clipboard path entirely.
-                        try:
-                            raw = (text or "").replace(" ", "%s")
-                            d.shell(f"input text {raw}")
-                            typed = True
-                        except Exception:
-                            typed = False
+                        # Shell input text avoids the clipboard path entirely. Skip it when the
+                        # value can't be transported exactly this way (see adb_input_text_arg) and
+                        # let send_keys handle it instead of typing a wrong secret.
+                        arg = adb_input_text_arg(text or "")
+                        if arg is not None:
+                            try:
+                                d.shell(f"input text {arg}")
+                                typed = True
+                            except Exception:
+                                typed = False
                     if not typed:
                         d.send_keys(text or "", clear=True)
                     # uiautomator2 may still use the clipboard for send_keys: never leave the value

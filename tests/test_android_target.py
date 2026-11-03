@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from jev_runner.targets.android import AndroidTarget, resolve_app
+from jev_runner.targets.android import AndroidTarget, adb_input_text_arg, resolve_app
 from jev_runner.targets.base import DeviceDisconnected, StalePage, TargetBlocked
 
 FIXTURE = Path("tests/fixtures/android/bac_login.xml")
@@ -484,3 +484,44 @@ def test_observe_reads_the_shown_app_when_focus_is_elsewhere(fake_device, link):
 def test_observe_keeps_focused_app_when_it_is_readable(fake_device, link):
     p = mk(link, fake_device).observe()
     assert p["url"].startswith("net.bac.sbe.android/") and "focused_package" not in p
+
+
+# --- adb `input text` secure-field escaping (hardening: only spaces were escaped before) ---
+
+def _shell_tokens(arg):
+    """How a POSIX device shell would tokenise `input text <arg>` — proves no metachar escapes
+    the single argument (no injection, no word-split)."""
+    import shlex
+    return shlex.split("input text " + arg)
+
+
+def test_input_text_arg_plain_text_is_passed_through():
+    assert adb_input_text_arg("hunter2") == "hunter2"
+    assert _shell_tokens(adb_input_text_arg("hunter2")) == ["input", "text", "hunter2"]
+
+
+def test_input_text_arg_encodes_space_as_percent_s():
+    # a space must survive as a space on-device; the established transport encodes it as %s
+    assert adb_input_text_arg("my pass") == "my%spass"
+    assert _shell_tokens(adb_input_text_arg("my pass")) == ["input", "text", "my%spass"]
+
+
+def test_input_text_arg_shell_metacharacters_stay_one_argument():
+    # &, ;, |, $, (, ), <, >, `, ", ' must not break out of the single argument
+    secret = "a&b;c|d$e(f)g<h>i`j\"k'l"
+    tokens = _shell_tokens(adb_input_text_arg(secret))
+    assert tokens == ["input", "text", secret]
+
+
+def test_input_text_arg_blocks_command_injection():
+    tokens = _shell_tokens(adb_input_text_arg("x; rm -rf /"))
+    # exactly three tokens: the malicious `;` and the rest are inside the one arg, not a command
+    assert tokens[:2] == ["input", "text"]
+    assert len(tokens) == 3
+    assert "rm" in tokens[2] and ";" in tokens[2]
+
+
+def test_input_text_arg_refuses_literal_percent():
+    # %s is our space encoding, so a literal % is ambiguous over this transport: signal fallback
+    assert adb_input_text_arg("50%off") is None
+    assert adb_input_text_arg("abc") is not None
