@@ -40,10 +40,17 @@ def daemon_env(env=None) -> dict:
     return env
 
 
+def daemon_python() -> str:
+    """The repo's venv interpreter when present: a client run from another Python (system python3,
+    another project's venv) would otherwise start a daemon that can't import jev_ultrafast."""
+    venv = REPO_ROOT / ".venv" / "bin" / "python3"
+    return str(venv) if venv.exists() else sys.executable
+
+
 def _spawn(stderr_path: Path) -> None:
     with open(stderr_path, "ab") as err:  # the child keeps its own copy of the fd
         subprocess.Popen(
-            [sys.executable, "-m", "jev_runner.daemon"],
+            [daemon_python(), "-m", "jev_runner.daemon"],
             cwd=REPO_ROOT,  # jev_runner is imported from the repo, not an installed package
             stdin=subprocess.DEVNULL, stdout=err, stderr=err,
             start_new_session=True,  # survives the MCP server; inherits env (API keys)

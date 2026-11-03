@@ -805,3 +805,12 @@ def test_daemon_env_adds_adb_dirs_without_dropping_path():
     assert parts[:2] == ["/usr/bin", "/bin"] and "/opt/homebrew/bin" in parts
     assert env["OPENAI_API_KEY"] == "k"  # the rest of the environment is inherited
     assert client.daemon_env({"PATH": "/opt/homebrew/bin"})["PATH"].count("/opt/homebrew/bin") == 1
+
+
+def test_daemon_python_prefers_repo_venv(tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "REPO_ROOT", tmp_path)
+    assert client.daemon_python() == client.sys.executable  # no venv: fall back to the caller's
+    venv = tmp_path / ".venv" / "bin" / "python3"
+    venv.parent.mkdir(parents=True)
+    venv.write_text("")
+    assert client.daemon_python() == str(venv)  # a client run from system python3 still works
