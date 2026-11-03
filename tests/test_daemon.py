@@ -864,4 +864,4 @@ def test_resume_typed_is_forwarded(daemon_with_fakes, keys):
     assert r["status"] == "paused_needs_input"
     d.script.targets[0]._advance()  # the person typed the code: the app moved on
     r = d.handle({"op": "resume", "args": {"session_id": r["session_id"], "typed": True}})["result"]
-    assert r["status"] == "done" and "•••" in json.dumps(r["last_actions"])
+    assert r["status"] == "done" and r["last_actions"][0] == "fill · OTP = •••"
