@@ -77,6 +77,9 @@ class Config:
     file_roots: list[str] = field(default_factory=list)
     downloads_dir: str = "~/Downloads"  # where Chrome saves downloads (reported per run)
     session_ttl_s: int = 900
+    # "keychain": type stored passwords/authenticator codes from the macOS Keychain (see
+    # jev_runner/vault.py) into their own site/app's secret fields; "none": always pause and ask.
+    vault: str = "keychain"
     reconnect_window_s: int = 30
     data_dir: Path = field(default_factory=data_dir)
 

@@ -9,6 +9,7 @@ from jev_ultrafast import model
 
 from . import result
 from . import signin
+from .vault import field_kind as vault_field_kind, scope_of as vault_scope
 from . import verify as verify_mod
 from .config import Config
 from .flows import (
@@ -105,7 +106,7 @@ class Runner:
                  flow: Flow | None = None, save_as: str | None = None,
                  store: FlowStore | None = None, start: str | None = None,
                  learn: bool = True, choose=model.choose, field_text=model.field_text, verify=None,
-                 memory=None):
+                 memory=None, vault=None):
         self.session_id, self.target, self.params, self.cfg = session_id, target, params, cfg
         self.goal = goal_text(goal, params)
         self._goal_raw = goal  # saved flows keep the goal without this run's values
@@ -125,6 +126,7 @@ class Runner:
         self._jev_steps = 0  # actions decided by Jev (not replayed)
         self._choose, self._field_text = choose, field_text
         self._verify = verify  # None: verify.check, looked up per call
+        self._vault = vault  # stored passwords/codes typed straight to the device (vault.Keychain)
         self.verified: bool | None = None  # independent check of the last DONE/BLOCKED
         self._verify_reason = ""
         self.status, self.reason = "running", None
@@ -156,8 +158,9 @@ class Runner:
         return self._drive()
 
     def resume(self, input: str | None = None, instruction: str | None = None,
-               confirm: bool = False) -> dict:
-        """Continue a paused run. Never lets a secret value reach a result."""
+               confirm: bool = False, typed: bool = False) -> dict:
+        """Continue a paused run. Never lets a secret value reach a result. `typed`: the person
+        typed the secret on the device themselves; continue without a value."""
         if self._money_uncertain:
             return result.build(self)
         if instruction:
@@ -169,11 +172,11 @@ class Runner:
             # Escape hatch: the paused element is gone; let Jev re-plan (guards still apply).
             self.pending = None
             return self.run()
-        if pending["type"] == "secret" and not input:
+        if pending["type"] == "secret" and not input and not typed:
             return result.build(self)
         if pending["type"] in ("money", "destructive") and not confirm:
             return result.build(self)
-        return self._drive(lambda: self._resume_pending(pending, input))
+        return self._drive(lambda: self._resume_pending(pending, input, typed))
 
     def _drive(self, first=None) -> dict:
         self.status, self.reason = "running", None
@@ -238,7 +241,7 @@ class Runner:
         flow.goal = scrub_text(flow.goal, self.secrets)
         return flow
 
-    def _resume_pending(self, pending: dict, input: str | None):
+    def _resume_pending(self, pending: dict, input: str | None, typed: bool = False):
         status = {"secret": "paused_needs_input",
                   "destructive": "paused_confirm"}.get(pending["type"], "paused_mismatch")
         self.page = {}  # force a real re-observe: the screen may have moved while paused
@@ -254,6 +257,11 @@ class Runner:
             found = find_by_locator(page, pending["locator"])
         if pending["type"] in ("money", "destructive"):
             found = [a for a in found if a.get("label") == pending["label"]]
+        if pending["type"] == "secret" and typed:
+            # The person typed it; the app has usually moved on, so the field may be gone by now.
+            self._typed_by_human(found[0] if len(found) == 1 else None, page, pending)
+            self.pending = None
+            return
         if not found:
             raise _Stop(status, "pending_element_missing")
         if len(found) > 1:
@@ -294,6 +302,46 @@ class Runner:
 
     def _text_hash(self, page: dict) -> str:
         return hashlib.sha256(scrub_text(page.get("text") or "", self.secrets).encode()).hexdigest()
+
+    def _typed_by_human(self, action: dict | None, page: dict, pending: dict) -> None:
+        """The person typed the secret on the device: record the step with no value, and keep
+        whatever the field now shows (a plain-text code field echoes it) out of every model
+        payload and result. `action` is None when the field has already left the screen."""
+        if action is None:
+            loc = pending.get("locator") or {}
+            action = {"kind": "fill", "id": pending["action_id"], "node": pending["action_id"],
+                      "label": pending.get("label") or "",
+                      **{k: v for k, v in loc.items() if k in ("resource_id", "role")}}
+        shown = action.get("value")
+        if shown and shown not in self.secrets:
+            self.secrets.append(shown)
+        self._secret_fields.update(self._field_keys(action))
+        entry = history_entry(scrub_value(action, self.secrets), scrub(page, self.secrets), None,
+                              self.cfg.secret_patterns)
+        entry["text"], entry["value_source"], entry["page_changed"] = "•••", "human", True
+        self.history.append(entry)
+        self.page = {}
+
+    def _fill_from_vault(self, action: dict, page: dict) -> bool:
+        """Type the stored password, or a fresh authenticator code, for this site/app if the vault
+        has one. The value goes from the Keychain to the device only: never to a model, a result
+        or a log. Entries are keyed by the page's host / the app's package, so a stored value can
+        only land on its own site or app."""
+        if self._vault is None:
+            return False
+        scope = vault_scope(getattr(self.target, "kind", None), page.get("url"))
+        kind = vault_field_kind(action)
+        try:
+            value = self._vault.totp(scope) if kind == "totp" else self._vault.password(scope)
+        except Exception:
+            value = None
+        if not value:
+            return False
+        n = len(self.history)
+        self._execute(action, page, value, verify=True, secret=True)
+        if len(self.history) > n:
+            self.history[-1]["value_source"] = "authenticator" if kind == "totp" else "keychain"
+        return True
 
     def _pending_for(self, kind: str, action: dict, page: dict, **extra) -> dict:
         return {"type": kind, "locator": locator_of(action), "action_id": action["id"],
@@ -493,6 +541,12 @@ class Runner:
     def _replay(self, j: int, step: dict, action: dict, page: dict):
         self.flow_i = j + 1  # a pause (secret/money) consumes the step; resume executes it
         if step.get("value") == "secret" and action.get("kind") == "fill":
+            try:
+                if self._fill_from_vault(action, page):
+                    return
+            except StalePage:
+                self.flow_i = j  # refused before typing: retry this step on the fresh screen
+                raise
             self.pending = self._pending_for("secret", action, page,
                                              field=scrub_text(action["label"], self.secrets))
             raise _Stop("paused_needs_input")
@@ -636,6 +690,8 @@ class Runner:
     def _dispatch(self, action: dict, page: dict, text_for):
         """Shared by Jev-chosen and replayed actions: secret, money and destructive guards first."""
         if self._is_secret(action):
+            if self._fill_from_vault(action, page):
+                return
             # Secrets never go to the text model: ask the human instead.
             self.pending = self._pending_for("secret", action, page,
                                              field=scrub_text(action["label"], self.secrets))

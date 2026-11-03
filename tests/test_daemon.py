@@ -856,3 +856,12 @@ def test_busy_chrome_tab_is_not_reused(daemon_with_fakes, keys):
     assert a["status"] == "paused_needs_input"
     b = run(d, target="chrome", goal="b", url_or_app=TAB_URL)["result"]
     assert b["session_id"] != a["session_id"] and d.targets_created == 2
+
+
+def test_resume_typed_is_forwarded(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    r = run(d, target="android", goal="otp")["result"]
+    assert r["status"] == "paused_needs_input"
+    d.script.targets[0]._advance()  # the person typed the code: the app moved on
+    r = d.handle({"op": "resume", "args": {"session_id": r["session_id"], "typed": True}})["result"]
+    assert r["status"] == "done" and "•••" in json.dumps(r["last_actions"])

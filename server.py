@@ -83,12 +83,17 @@ def resume(
     input: str | None = None,
     instruction: str | None = None,
     confirm: bool = False,
+    typed: bool = False,
 ) -> dict:
-    """Continue a paused session. Use `input` to answer paused_needs_input (secrets such as
-    OTPs go here and are never logged), `instruction` to give extra guidance, and
-    `confirm=True` to approve a paused_mismatch ONLY after the user has approved it."""
+    """Continue a paused session. For paused_needs_input prefer `typed=True`: ask the user to type
+    the password/code on the device or in the tab themselves, then resume with typed=True (the
+    value never passes through the chat). `input` types a value you were given (never logged).
+    Passwords/codes stored in the Mac's Keychain for that site/app are typed by jevd before it
+    ever pauses. `instruction` gives extra guidance; `confirm=True` approves a paused_mismatch /
+    paused_confirm ONLY after the user has explicitly approved it."""
     return _call("resume", {
         "session_id": session_id, "input": input, "instruction": instruction, "confirm": confirm,
+        "typed": typed,
     })
 
 

@@ -11,7 +11,7 @@ def _data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def cfg():
-    return config.Config()
+    return config.Config(vault="none")  # tests never touch the real Keychain
 
 
 @pytest.fixture(autouse=True)

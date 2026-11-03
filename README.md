@@ -145,3 +145,25 @@ claude mcp add jev-runner -- uv run --directory /Users/eduardo/Projects/Personal
 ```bash
 uv run mcp dev server.py
 ```
+
+## Passwords and authenticator codes
+
+A password an agent passes through `resume(input=...)` has already crossed the chat and the
+agent's transcript on disk. Two safer paths, both built in:
+
+- **Stored in the macOS Keychain, typed by jevd.** Store once per site (Chrome: the page's host)
+  or app (Android: the package); the value then goes from the Keychain to the device only, and an
+  agent only ever sees `value_source: keychain` / `authenticator` in the history:
+
+  ```sh
+  python -m jev_runner.vault set app.example.com        # prompts; nothing on the command line
+  python -m jev_runner.vault set-totp app.example.com   # base32 seed or otpauth:// URI
+  python -m jev_runner.vault check app.example.com      # what is stored (never the values)
+  python -m jev_runner.vault code app.example.com       # current code, to compare with your app
+  ```
+
+  Entries live in the login keychain under services `jev-runner` and `jev-runner-totp`. A stored
+  value can only be typed into a secret field on its own host/package. Set `vault = "none"` in
+  `config.toml` to disable.
+- **Typed by you.** When a run pauses on a secret field, type it on the device or in the tab
+  yourself and have the agent call `resume(session_id, typed=True)`.

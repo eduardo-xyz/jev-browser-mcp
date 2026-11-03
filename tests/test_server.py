@@ -44,6 +44,7 @@ def test_run_task_forwards_all_args(monkeypatch):
 
 @pytest.mark.parametrize("tool,args,op", [
     ("resume", {"session_id": "s", "confirm": True}, "resume"),
+    ("resume", {"session_id": "s", "typed": True}, "resume"),
     ("screenshot", {"session_id": "s"}, "screenshot"),
     ("read", {"session_id": "s"}, "read"),
     ("end_session", {"session_id": "s"}, "end_session"),

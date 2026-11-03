@@ -23,6 +23,7 @@ from .config import Config
 from .config import socket_path as config_socket_path
 from .flows import FlowStore, slug
 from .runner import Runner
+from .vault import Keychain
 from .targets.base import DeviceDisconnected, TargetBlocked
 
 REQUIRED_ENV_VARS = ("TYPESAFE_API_KEY", "TEXT_MODEL_API_KEY")
@@ -81,6 +82,7 @@ class Daemon:
         self.target_factory = target_factory or self._default_target
         self.runner_factory = runner_factory
         self.store = FlowStore(cfg.data_dir / "flows")
+        self.vault = Keychain(enabled=cfg.vault == "keychain")  # stored passwords/codes
         try:  # a memory failure must never take the daemon down; runs just aren't recorded
             from .memory import MemoryStore
             self.memory = MemoryStore(cfg.data_dir / "memory.db")
@@ -262,7 +264,7 @@ class Daemon:
                     session.session_id, session.target, goal, params, self.cfg,
                     max_steps=max_steps, money_params=money_params, flow=chosen,
                     save_as=save_as, store=self.store, start=start, learn=learn,
-                    memory=self.memory)
+                    memory=self.memory, vault=self.vault)
             except BaseException:
                 if new:  # don't leave a runner-less session holding a device
                     self._close_session(session)
@@ -380,7 +382,8 @@ class Daemon:
         return session
 
     def op_resume(self, session_id: str, input: str | None = None,
-                  instruction: str | None = None, confirm: bool = False) -> dict:
+                  instruction: str | None = None, confirm: bool = False,
+                  typed: bool = False) -> dict:
         session = self._get(session_id)
         with session.lock:
             if session.closed:
@@ -394,7 +397,7 @@ class Daemon:
                 # settled: report the last outcome (e.g. after a client disconnect), never act
                 return result.build(runner)
             return self._drive(session, lambda: runner.resume(
-                input=input, instruction=instruction, confirm=confirm))
+                input=input, instruction=instruction, confirm=confirm, typed=typed))
 
     def op_screenshot(self, session_id: str) -> dict:
         session = self._get(session_id)
