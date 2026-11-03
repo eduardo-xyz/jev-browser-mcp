@@ -56,3 +56,43 @@ def test_android_login_screens_unaffected(cfg):
     t = FakeTarget([_login_form(url="net.bank.app/Login"), page()])
     r = Runner("s1", t, "check balance", None, cfg, choose=scripted_choose(["DONE"]))
     assert r.run().get("reason") != "signed_out"
+
+
+class ReloadingChrome(ChromeTarget):
+    """A Chrome tab that knows its start URL and can be sent back to it (like ChromeTarget)."""
+    def __init__(self, pages, url, back_to=None):
+        super().__init__(pages)
+        self.url, self.reloads, self._back_to = url, [], back_to
+
+    def ensure_at(self, url):
+        self.reloads.append(url)
+        if self._back_to is not None:
+            self.i = self._back_to
+        return True
+
+
+def test_signin_bounce_on_a_fresh_load_is_retried_once(cfg):
+    start = "https://app.example.com/v2/location/L1/settings/users"
+    users = page(click("n1", "Users"), url=start, text="Users")
+    # fresh load bounced to the login page; after one reload the app renders the requested page
+    t = ReloadingChrome([_login_form(), users], url=start, back_to=1)
+    r = Runner("s1", t, "READ ONLY. Stop when the Users list is visible.", None, cfg,
+               choose=scripted_choose(["DONE"]))
+    out = r.run()
+    assert out["status"] == "done" and t.reloads == [start]
+
+
+def test_persisting_login_page_still_blocks_after_the_one_reload(cfg):
+    start = "https://app.example.com/v2/location/L1/settings/users"
+    t = ReloadingChrome([_login_form()], url=start, back_to=0)
+    r = Runner("s1", t, "READ ONLY. Wait for the page.", None, cfg, choose=scripted_choose(["DONE"]))
+    out = r.run()
+    assert out["status"] == "blocked" and out["reason"] == "signed_out"
+    assert t.reloads == [start] and out["model_calls"] == 0
+
+
+def test_no_reload_when_the_run_itself_starts_on_a_login_url(cfg):
+    start = "https://crm.example.com/login?next=/settings"
+    t = ReloadingChrome([_login_form(url=start)], url=start)
+    out = Runner("s1", t, "READ ONLY. Wait.", None, cfg, choose=scripted_choose(["DONE"])).run()
+    assert out["reason"] == "signed_out" and t.reloads == []

@@ -148,6 +148,7 @@ class Runner:
         self.receipt: dict | None = None
         self._started = time.perf_counter()
         self._stale = 0
+        self._signin_reloaded = False  # one reload of the start URL per run on a sign-in bounce
         self._obs_log: list[tuple[str, str]] = []  # recent (where, text): a field can scroll off
 
     def run(self) -> dict:
@@ -376,6 +377,8 @@ class Runner:
         page = self._observe()
         if (getattr(self.target, "kind", None) == "chrome" and not self._signin_ok
                 and signin.is_signin_page(page)):
+            if self._reload_once_on_signin(page):
+                return  # back on the requested page's load: observe again
             raise _Stop("blocked", "signed_out")  # a person must sign in in that Chrome
         replay = self._match_flow(page)
         if replay is None and self.flow is not None:
@@ -406,6 +409,23 @@ class Runner:
             self.page = {}
             if self._stale >= 3:
                 raise
+
+    def _reload_once_on_signin(self, page: dict) -> bool:
+        """A signed-in web app can still bounce one fresh load of a deep link to its login page
+        (seen while its session token was being refreshed: sibling tabs stayed signed in and the
+        same link loaded fine seconds later). Before blocking the run, reload the start URL once;
+        a truly signed-out browser lands on the login page again and then blocks as before."""
+        start = getattr(self.target, "url", None)
+        ensure_at = getattr(self.target, "ensure_at", None)
+        if self._signin_reloaded or not start or ensure_at is None or signin.is_login_url(start):
+            return False
+        self._signin_reloaded = True
+        _log.info("session=%s sign-in page at %s on a fresh load: reloading %s once",
+                  self.session_id, page.get("url", ""), start)
+        if not self._timed("act_ms", ensure_at, start):
+            return False
+        self.page = {}
+        return True
 
     def _consecutive_waits(self) -> int:
         n = 0

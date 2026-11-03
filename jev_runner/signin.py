@@ -30,11 +30,16 @@ def _host_path(url: str) -> tuple[str, str]:
     return (u.hostname or "").lower(), u.path or ""
 
 
-def is_signin_page(page: dict) -> bool:
-    host, path = _host_path(page.get("url", ""))
+def is_login_url(url: str | None) -> bool:
+    """An identity-provider host or a login-shaped path: a URL that is a sign-in page by itself."""
+    host, path = _host_path(url or "")
     if any(host == h or host.endswith("." + h) for h in _IDP_HOSTS):
         return True
-    if _LOGIN_PATH.search(path):
+    return bool(_LOGIN_PATH.search(path))
+
+
+def is_signin_page(page: dict) -> bool:
+    if is_login_url(page.get("url", "")):
         return True
     has_password = any(a.get("password") for a in page.get("actions", []))
     return has_password and bool(_SIGNIN_WORDS.search(page.get("text") or ""))

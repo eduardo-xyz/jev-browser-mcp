@@ -50,6 +50,10 @@ picks the Chrome. (`BU_CDP_URL`/`BU_NAME` in the environment still work for a on
 `config.toml` wins when both are set, and the daemon logs the override.) The daemon also loads the
 repo `.env` itself, so a jevd started without `--env-file` still has its model keys.
 
+A signed-in web app can still bounce one fresh load of a deep link to its login page (seen with a
+session token mid-refresh). Jev reloads the start URL once before reporting `signed_out`; a truly
+signed-out Chrome lands on the login page again and blocks as before.
+
 **Check before the first Chrome run:** `status` → `chrome.cdp_url` must be the Chrome you expect and
 `keys` must all be true. A jevd attached to the wrong Chrome (one that is not signed in) shows every
 run as `blocked / signed_out`; a missing key fails every run.
