@@ -35,6 +35,7 @@ TOOL_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / "Library/A
 
 def daemon_env(env=None) -> dict:
     env = dict(os.environ if env is None else env)
+    config.load_dotenv(env)  # API keys the launcher didn't pass; existing values win
     parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
     env["PATH"] = os.pathsep.join(parts + [d for d in TOOL_DIRS if d not in parts])
     return env

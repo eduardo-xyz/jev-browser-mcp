@@ -12,7 +12,9 @@ def _line(h: dict) -> str:
 HINTS = {
     "signed_out": ("This Chrome is signed out of the site (it landed on a sign-in page). A person must "
                    "sign in in that Chrome window, including any 2FA, then run the task again. To have "
-                   "the run itself sign in, say so in the goal."),
+                   "the run itself sign in, say so in the goal. If the signed-in Chrome is not the one "
+                   "jevd drives, check `status` -> chrome.cdp_url: the binding comes from config.toml "
+                   "(chrome_cdp_url, chrome_label) in jevd's data dir."),
 }
 
 

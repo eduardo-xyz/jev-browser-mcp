@@ -45,3 +45,40 @@ def test_socket_path_long_data_dir_moves_to_tmp():
     # stable and unique per data dir
     assert socket_path(longd) == sp
     assert socket_path(Path("/private/var/folders/yy/" + "b" * 90 + "/jev-data")) != sp
+
+
+# --- the repo .env and the Chrome binding ---------------------------------------------------
+
+def test_dotenv_values_and_load(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text('# keys\nTYPESAFE_API_KEY="k1"\nexport TEXT_MODEL_API_KEY=k2\n\nbad line\nEMPTY=\n')
+    assert config.dotenv_values(env_file) == {"TYPESAFE_API_KEY": "k1", "TEXT_MODEL_API_KEY": "k2", "EMPTY": ""}
+    environ = {"TEXT_MODEL_API_KEY": "already"}
+    added = config.load_dotenv(environ, env_file)
+    assert added == ["TYPESAFE_API_KEY", "EMPTY"]
+    assert environ["TEXT_MODEL_API_KEY"] == "already" and environ["TYPESAFE_API_KEY"] == "k1"
+    assert config.dotenv_values(tmp_path / "missing.env") == {}
+
+
+def test_chrome_binding_from_config_wins_over_environment(caplog):
+    cfg = config.Config(chrome_cdp_url="http://127.0.0.1:9333", chrome_label="da")
+    environ = {"BU_CDP_URL": "http://127.0.0.1:9222", "OTHER": "x"}
+    with caplog.at_level("WARNING", logger="jevd"):
+        binding = config.apply_chrome_binding(cfg, environ)
+    assert binding == {"cdp_url": "http://127.0.0.1:9333", "label": "da"}
+    assert environ["BU_CDP_URL"] == "http://127.0.0.1:9333" and environ["BU_NAME"] == "da"
+    assert "config.toml says chrome_cdp_url" in caplog.text
+
+
+def test_chrome_binding_unset_leaves_environment_alone():
+    environ = {"BU_CDP_URL": "http://127.0.0.1:9222"}
+    assert config.apply_chrome_binding(config.Config(), environ) == {"cdp_url": "http://127.0.0.1:9222",
+                                                                      "label": None}
+    assert config.chrome_binding({}) == {"cdp_url": None, "label": None}
+
+
+def test_chrome_binding_loads_from_toml(tmp_path, monkeypatch):
+    monkeypatch.setenv("JEV_DATA_DIR", str(tmp_path))
+    (tmp_path / "config.toml").write_text('chrome_cdp_url = "http://127.0.0.1:9333"\nchrome_label = "da"\n')
+    cfg = config.load()
+    assert (cfg.chrome_cdp_url, cfg.chrome_label) == ("http://127.0.0.1:9333", "da")

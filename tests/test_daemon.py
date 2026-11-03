@@ -713,6 +713,29 @@ def test_status_probes_configured_phone(cfg, script, monkeypatch):
         d.close()
 
 
+def test_status_reports_chrome_binding_keys_and_data_dir(cfg, script, monkeypatch):
+    monkeypatch.setenv("BU_CDP_URL", "http://127.0.0.1:9333")
+    monkeypatch.setenv("BU_NAME", "da")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    monkeypatch.delenv("TEXT_MODEL_API_KEY", raising=False)
+    d = Daemon(cfg, target_factory=script.target_factory, runner_factory=script.runner_factory)
+    try:
+        st = d.handle({"op": "status", "args": {}})["result"]
+        assert st["chrome"] == {"cdp_url": "http://127.0.0.1:9333", "label": "da"}
+        assert st["keys"] == {"TYPESAFE_API_KEY": True, "TEXT_MODEL_API_KEY": False}
+        assert st["data_dir"] == str(cfg.data_dir)
+    finally:
+        d.close()
+
+
+def test_daemon_env_fills_keys_from_dotenv(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("TYPESAFE_API_KEY=from-dotenv\nTEXT_MODEL=deepseek-chat\n")
+    monkeypatch.setattr("jev_runner.config.REPO_ROOT", tmp_path)
+    env = client.daemon_env({"PATH": "/usr/bin", "TEXT_MODEL": "mine"})
+    assert env["TYPESAFE_API_KEY"] == "from-dotenv" and env["TEXT_MODEL"] == "mine"
+
+
 # -- files -------------------------------------------------------------------
 
 def test_files_only_for_chrome(daemon_with_fakes, keys):

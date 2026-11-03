@@ -1,9 +1,16 @@
-"""Daemon configuration: data directory and config.toml loading."""
+"""Daemon configuration: data directory, config.toml loading, the repo .env and the Chrome binding."""
 import hashlib
+import logging
 import os
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
+
+log = logging.getLogger("jevd")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+# browser_harness reads these at import time to pick the Chrome it attaches to (BU_CDP_URL: a
+# remote-debugging endpoint; BU_NAME: its daemon socket name). config.toml keys they come from:
+CHROME_ENV = (("chrome_cdp_url", "BU_CDP_URL"), ("chrome_label", "BU_NAME"))
 
 # A unix socket path must fit the OS limit (104 chars on macOS); a long JEV_DATA_DIR would overflow it.
 _SOCK_MAX = 100
@@ -81,6 +88,13 @@ class Config:
     # jev_runner/vault.py) into their own site/app's secret fields; "none": always pause and ask.
     vault: str = "keychain"
     reconnect_window_s: int = 30
+    # Which Chrome this instance drives: the remote-debugging URL of a Chrome launched with
+    # --remote-debugging-port (e.g. "http://127.0.0.1:9333") and a short label for its harness
+    # daemon (e.g. "da"). Kept here, in the data dir, so the binding survives whoever starts jevd:
+    # a daemon autostarted without BU_CDP_URL/BU_NAME in its environment used to attach to the
+    # default Chrome silently. Unset: browser_harness discovers a Chrome itself.
+    chrome_cdp_url: str | None = None
+    chrome_label: str | None = None
     data_dir: Path = field(default_factory=data_dir)
 
 
@@ -100,3 +114,60 @@ def load() -> Config:
         if key in values and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
             raise ValueError(f"config.toml: {key} must be a list of strings")
     return Config(data_dir=base, **{k: v for k, v in values.items() if k in known})
+
+
+def dotenv_values(path: Path | None = None) -> dict[str, str]:
+    """KEY=value lines of the repo's .env (comments and blanks skipped, simple quotes stripped)."""
+    path = path or REPO_ROOT / ".env"
+    out: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        if k.startswith("export "):
+            k = k[7:].strip()
+        if k:
+            out[k] = v.strip().strip('"').strip("'")
+    return out
+
+
+def load_dotenv(environ=None, path: Path | None = None) -> list[str]:
+    """Fill missing variables from the repo .env (API keys, model names). Values already in the
+    environment win. Returns the names that were added. A jevd started by hand or by a client
+    whose host didn't pass --env-file used to run without any model key."""
+    environ = os.environ if environ is None else environ
+    added = []
+    for k, v in dotenv_values(path).items():
+        if k not in environ:
+            environ[k] = v
+            added.append(k)
+    return added
+
+
+def apply_chrome_binding(cfg: "Config", environ=None) -> dict:
+    """Export the Chrome binding from config.toml for browser_harness. The data dir's config is
+    authoritative: an environment value that differs is overridden (and logged), so the Chrome a
+    jevd drives depends only on its data dir, never on who started it. Returns the binding."""
+    environ = os.environ if environ is None else environ
+    for attr, var in CHROME_ENV:
+        value = getattr(cfg, attr)
+        if not value:
+            continue
+        current = environ.get(var)
+        if current and current != value:
+            log.warning("%s=%s from the environment ignored: config.toml says %s = %r",
+                        var, current, attr, value)
+        environ[var] = value
+    return chrome_binding(environ)
+
+
+def chrome_binding(environ=None) -> dict:
+    environ = os.environ if environ is None else environ
+    return {"cdp_url": environ.get("BU_CDP_URL") or None,
+            "label": environ.get("BU_NAME") or None}

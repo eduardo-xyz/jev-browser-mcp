@@ -31,12 +31,28 @@ which may not be the profile you want (this has picked the wrong profile repeate
 the profile first**: open a known page and `screenshot`, before anything else.
 
 To bind an instance to one profile, launch that Chrome with its own remote-debugging port and run a
-**separate** jevd pointed at it, with its own data dir so it doesn't touch the shared instance:
+**separate** jevd pointed at it, with its own data dir so it doesn't touch the shared instance. Put
+the binding in that data dir's `config.toml`, so it holds no matter who starts the daemon:
+
+```toml
+# $JEV_DATA_DIR/config.toml
+chrome_cdp_url = "http://127.0.0.1:9333"   # the Chrome's --remote-debugging-port endpoint
+chrome_label = "<label>"                    # short name for its harness daemon (e.g. "da")
+```
 
 ```bash
-BU_CDP_URL=http://127.0.0.1:9333 BU_NAME=<label> JEV_DATA_DIR=~/.local/share/jev-<label> \
+JEV_DATA_DIR=~/.local/share/jev-<label> \
   uv run --directory /Users/eduardo/Projects/Personal/jev-browser-mcp --env-file .env python server.py
 ```
+
+`JEV_DATA_DIR` is the only variable the launch needs: it picks the data dir, and the data dir's config
+picks the Chrome. (`BU_CDP_URL`/`BU_NAME` in the environment still work for a one-off, but
+`config.toml` wins when both are set, and the daemon logs the override.) The daemon also loads the
+repo `.env` itself, so a jevd started without `--env-file` still has its model keys.
+
+**Check before the first Chrome run:** `status` → `chrome.cdp_url` must be the Chrome you expect and
+`keys` must all be true. A jevd attached to the wrong Chrome (one that is not signed in) shows every
+run as `blocked / signed_out`; a missing key fails every run.
 
 Each data dir gets its own socket automatically, so instances stay isolated (a long `JEV_DATA_DIR` is
 fine now — the socket is relocated to a short path when needed).

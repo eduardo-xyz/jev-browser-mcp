@@ -158,7 +158,10 @@ def add_lesson(body: str, target: str | None = None, app: str | None = None,
 def status() -> dict:
     """Show daemon status: `sessions` (each with session_id, target, status and idle_s),
     `android` (`serial` last reached and whether it is `connected`), `flows` (count of saved
-    flows) and `memory` (counts of learned `lessons` and recorded `runs`, with `done`/`verified`)."""
+    flows), `memory` (counts of learned `lessons` and recorded `runs`, with `done`/`verified`),
+    `data_dir`, `chrome` (`cdp_url` and `label` of the Chrome this jevd drives; null = whichever
+    Chrome the harness finds) and `keys` (whether each model API key is loaded). Check `chrome`
+    before the first Chrome run: a jevd bound to the wrong Chrome shows as `signed_out`."""
     return _call("status", {})
 
 

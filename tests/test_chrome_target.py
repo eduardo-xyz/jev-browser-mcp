@@ -837,3 +837,42 @@ def test_ensure_at_false_when_the_tab_is_gone():
         raise RuntimeError("No target with given id found")
     b.evaluate = gone
     assert t.ensure_at("https://x.test") is False
+
+
+# --- freshness: only the action's own target must be unchanged ------------------------------
+
+from jev_runner.targets.chrome import fresh_check  # noqa: E402
+
+
+def _page():
+    return {"marker": ["m"], "page_key": ["k"], "guards": {"7": ["btn", "button", "Save"]}}
+
+
+def test_wait_and_scroll_are_never_stale_even_on_a_churning_page():
+    calls = []
+    evaluate = lambda expr: calls.append(expr) or None  # noqa: E731
+    assert fresh_check(evaluate, _page(), {"kind": "wait"}) is True
+    assert fresh_check(evaluate, _page(), {"kind": "scroll", "delta": 560}) is True
+    assert calls == []  # no round trip at all
+
+
+def test_node_actions_compare_page_key_and_the_node_guard_only():
+    seen = []
+
+    def evaluate(expr):
+        seen.append(expr)
+        return [["k"], ["btn", "button", "Save"]]
+    for kind in ("click", "select", "fill", "type"):
+        assert fresh_check(evaluate, _page(), {"kind": kind, "node": 7}) is True
+    assert all("c.nodes.get(7)" in e for e in seen)
+    changed = lambda expr: [["k"], ["btn", "button", "Saved"]]  # noqa: E731
+    assert fresh_check(changed, _page(), {"kind": "click", "node": 7}) is False
+    assert fresh_check(evaluate, _page(), {"kind": "click", "node": 9}) is False  # not in guards
+    assert fresh_check(evaluate, _page(), {"kind": "click", "node": "e7"}) is False  # not a node id
+    gone = lambda expr: None  # noqa: E731  # __jevFast not installed: page replaced
+    assert fresh_check(gone, _page(), {"kind": "click", "node": 7}) is False
+
+
+def test_no_action_compares_the_whole_page_marker():
+    assert fresh_check(lambda expr: ["m"], _page(), None) is True
+    assert fresh_check(lambda expr: ["other"], _page(), None) is False

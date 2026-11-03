@@ -492,6 +492,30 @@ def _wait_loaded(b, timeout: float = LOAD_TIMEOUT) -> bool:
         _sleep(_POLL)
 
 
+_NODE_FRESH = ("(() => { const c=window.__jevFast; "
+               "return c ? [c.pageKey(), c.guard(c.nodes.get(%d))] : null; })()")
+
+
+def fresh_check(evaluate, page: dict, action: dict | None) -> bool:
+    """Whether `action` may still act on `page`. Upstream compares the whole-page marker (title,
+    text, every control) for anything but click/select, so on a page that keeps re-rendering
+    (live timestamps, polling widgets) every wait/fill came back stale and the run died after
+    three strikes without ever acting. Here only the action's own target has to be unchanged
+    (identity, role, name, value, enclosing form/row text), plus the page key (URL and every
+    field's value), which is what upstream checks for a click. Waiting and scrolling send no
+    input to any element, so they are never stale. No action: the whole-page marker, as before."""
+    if action is None:
+        from jev_ultrafast.browser import MARKER  # lazy: nothing touches the harness at import
+        return evaluate(MARKER) == page.get("marker")
+    if action.get("kind") in ("wait", "scroll"):
+        return True
+    node = action.get("node")
+    if type(node) is not int:
+        return False
+    current = evaluate(_NODE_FRESH % node)
+    return current == [page.get("page_key"), (page.get("guards") or {}).get(str(node))]
+
+
 def _default_factory(url: str, background: bool):
     """Open a tab via upstream Browser; imported lazily so nothing touches Chrome at import time."""
     from jev_ultrafast.browser import Browser
@@ -507,6 +531,9 @@ def _default_factory(url: str, background: bool):
                       deviceScaleFactor=1, mobile=False)
             self.call("Emulation.setFocusEmulationEnabled", enabled=True)
             self.call("Page.navigate", url=url)
+
+        def fresh(self, page, action=None):
+            return fresh_check(self.evaluate, page, action)
 
         def alive(self) -> bool:
             """Whether the tab still exists (ms): a CDP call on a closed tab only times out (5 s)."""

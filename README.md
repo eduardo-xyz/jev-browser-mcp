@@ -73,6 +73,10 @@ Everything lives in `$JEV_DATA_DIR` (optional), default `~/.local/share/jev-runn
 `outbox/` (files to upload/push), `inbox/` (files pulled from the phone),
 `jevd.log`, `jevd.stderr` (daemon startup errors).
 
+The daemon loads the repo `.env` itself (values already in its environment win), so starting it by
+hand works too. `status` shows which Chrome it drives (`chrome`), whether the keys are loaded (`keys`)
+and its `data_dir`.
+
 Restart the daemon (e.g. after setting keys or editing `config.toml`; the next tool call
 autostarts it): `pkill -f jev_runner.daemon`. List-typed keys must be lists of strings;
 a wrong type makes the daemon refuse to start (see `jevd.stderr`).
@@ -84,6 +88,8 @@ android_serial = "zdirl7t84pqwh6ww"
 android_mdns = "adb-zdirl7t84pqwh6ww"
 android_ip = "192.168.1.215"
 relay_python = "/usr/bin/python3"  # interpreter for the wireless relay helper (see below)
+chrome_cdp_url = "http://127.0.0.1:9333"  # the Chrome to drive (its --remote-debugging-port);
+chrome_label = "da"                       # unset: the harness picks a Chrome itself
 money_apps = []     # app packages/names where contextual labels (Confirm, Send) are guarded
 own_accounts = []   # your own account numbers; transfers to these are recognised as own-account
 navigation_labels = []  # exact button labels you checked only open a menu (never money actions)

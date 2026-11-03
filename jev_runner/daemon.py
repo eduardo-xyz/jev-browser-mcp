@@ -519,6 +519,10 @@ class Daemon:
                          for s in sessions],
             "android": android,
             "flows": len(self.store.list()),
+            "data_dir": str(self.cfg.data_dir),
+            # Which Chrome `target: "chrome"` runs drive. None = whatever browser_harness finds.
+            "chrome": config.chrome_binding(),
+            "keys": {name: bool(os.environ.get(name)) for name in REQUIRED_ENV_VARS},
         }
         if self.memory is not None:
             try:
@@ -618,6 +622,7 @@ class _Server(socketserver.ThreadingUnixStreamServer):
 
 def serve(on_ready=None) -> bool:
     """Run jevd until shutdown. Returns False at once if another jevd holds the lock."""
+    added = config.load_dotenv()  # keys from the repo .env when the launcher passed none
     cfg = config.load()
     lock_file = open(cfg.data_dir / "jevd.lock", "w")
     try:
@@ -650,7 +655,9 @@ def serve(on_ready=None) -> bool:
                     log.exception("reaper failed")
 
         threading.Thread(target=reaper, daemon=True, name="jevd-reaper").start()
+        binding = config.apply_chrome_binding(cfg)  # before anything imports browser_harness
         log.info("jevd listening on %s (pid %d)", path, os.getpid())
+        log.info("data_dir=%s chrome=%s env_from_dotenv=%s", cfg.data_dir, binding, added)
         if threading.current_thread() is threading.main_thread():
             # SIGTERM: shut down cleanly (close targets, remove the socket)
             signal.signal(signal.SIGTERM,
