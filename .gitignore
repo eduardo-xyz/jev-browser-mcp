@@ -2,3 +2,7 @@
 .env
 __pycache__/
 *.pyc
+
+# scratch screenshots from live runs (bank/app screens): never commit
+.tmp-*
+*.tmp.png
