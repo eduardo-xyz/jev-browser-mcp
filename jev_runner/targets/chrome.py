@@ -613,6 +613,9 @@ _POST_OBSERVE_FN = """((nodes, loadingSel) => {
 })"""
 
 
+_NEW_TAB_GRACE = 0.3  # s after a click for a window.open to register as a target
+
+
 _NODE_FRESH = ("(() => { const c=window.__jevFast; "
                "return c ? [c.pageKey(), c.guard(c.nodes.get(%d))] : null; })()")
 
@@ -1158,18 +1161,71 @@ class ChromeTarget:
             raise
         if not is_fresh:
             raise StalePage("Page changed since this decision. Observe again.")
+        before = self._page_targets() if action.get("kind") == "click" else None
         if action.get("shadow"):
             self._act_shadow(action, text)  # inside a shadow root: upstream's hit test can't see it
-            return
+        else:
+            try:
+                self.browser.act(action, page, text=text)
+            except Exception as exc:
+                # Upstream raises StalePage only from its pre-input hit-test (target moved or
+                # covered), before any input is dispatched: safe to re-observe and retry.
+                if _is_upstream_stale(exc):
+                    raise StalePage(str(exc)) from exc
+                # Anything else: input may already have been dispatched; never a StalePage.
+                raise RuntimeError(f"action_uncertain: {exc}") from exc
+        if before is not None:
+            self._follow_new_tab(before)
+
+    # --- a click that opens a new tab ---------------------------------------------------------
+    # Seen: a contact page's "Audit logs" button is window.open to a page of the same site. Jev's
+    # session is bound to one tab, so the click looked like a no-op (three identical clicks, then
+    # no_progress) and every try left another tab open in the user's Chrome. The run now follows
+    # a tab its own click opened; the tab it came from is closed with the session.
+
+    def _page_targets(self) -> set | None:
         try:
-            self.browser.act(action, page, text=text)
+            return {t.get("targetId") for t in _cdp("Target.getTargets").get("targetInfos", [])
+                    if t.get("type") == "page"}
+        except Exception:
+            return None
+
+    def _follow_new_tab(self, before: set | None) -> None:
+        if before is None or not getattr(self.browser, "target", None):
+            return
+        _sleep(_NEW_TAB_GRACE)
+        try:
+            targets = _cdp("Target.getTargets").get("targetInfos", [])
+        except Exception:
+            return
+        opened = [t for t in targets if t.get("type") == "page" and t.get("targetId") not in before
+                  and t.get("openerId") == self.browser.target]
+        if not opened:
+            return
+        new_id = opened[-1]["targetId"]
+        try:
+            session = _cdp("Target.attachToTarget", targetId=new_id, flatten=True)["sessionId"]
         except Exception as exc:
-            # Upstream raises StalePage only from its pre-input hit-test (target moved or covered),
-            # before any input is dispatched: safe to re-observe and retry, not uncertain.
-            if _is_upstream_stale(exc):
-                raise StalePage(str(exc)) from exc
-            # Anything else: input may already have been dispatched; never surface as StalePage.
-            raise RuntimeError(f"action_uncertain: {exc}") from exc
+            _log.info("new tab %s opened by a click but could not be attached: %s", new_id, exc)
+            return
+        old = self.browser.target
+        self.browser.target, self.browser.session = new_id, session
+        if hasattr(self.browser, "after_input"):
+            self.browser.after_input = None
+        for method, params in (("Emulation.setDeviceMetricsOverride",
+                                {"width": 1120, "height": 780, "deviceScaleFactor": 1, "mobile": False}),
+                               ("Emulation.setFocusEmulationEnabled", {"enabled": True})):
+            try:
+                self.browser.call(method, **params)
+            except Exception:
+                pass
+        self._orphans = getattr(self, "_orphans", []) + [old]
+        _wait_loaded(self.browser)
+        _log.info("followed the tab a click opened: %s -> %s (%s)", old, new_id,
+                  (opened[-1].get("url") or "")[:80])
+        if self._grouping:
+            self._tab = new_id
+            tab_groups.claim(new_id)
 
     def _act_shadow(self, action: dict, text: str | None) -> None:
         """Click/fill/select a control inside a shadow root: resolve with a composed hit test (no
@@ -1301,4 +1357,10 @@ class ChromeTarget:
     def close(self) -> None:
         for frame in getattr(self, "_frames", {}).values():
             self._detach(frame["session"])
+        for old in getattr(self, "_orphans", []):  # tabs this run moved on from
+            try:
+                _cdp("Target.closeTarget", targetId=old)
+            except Exception:
+                pass
+        self._orphans = []
         self._close_quiet(self.browser)

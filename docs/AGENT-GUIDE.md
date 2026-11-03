@@ -54,7 +54,8 @@ A signed-in web app can still bounce one fresh load of a deep link to its login 
 session token mid-refresh). Jev reloads the start URL once before reporting `signed_out`; a truly
 signed-out Chrome lands on the login page again and blocks as before.
 
-While a page shows loaders or skeletons (or almost no text), the runner looks again on its own, up to
+A click that opens a new tab (window.open, target=_blank) is followed: the run continues in the new
+tab and closes the one it came from when the session ends. While a page shows loaders or skeletons (or almost no text), the runner looks again on its own, up to
 20 s per run, before asking Jev anything: no more BLOCKED on a navigation shell. Controls that another
 element is sitting on (an open panel, a sticky bar) are left out of the observed actions, since a click
 there would land on the covering element. Pages built from web components (shadow DOM) are read through

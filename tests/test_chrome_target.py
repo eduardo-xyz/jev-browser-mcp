@@ -968,3 +968,58 @@ def test_loading_flag_and_tolerance_of_a_failed_probe():
     assert _observe_with({"covered": [], "loading": True}, acts)["loading"] is True
     page = _observe_with("not a dict", acts)  # probe failed: nothing dropped, no flag
     assert [a["id"] for a in page["actions"]] == ["e1"] and "loading" not in page
+
+
+# --- a click that opens a new tab is followed ------------------------------------------------
+
+def _tab_target(monkeypatch, targets_after):
+    f = FakeBrowserFactory(["complete"])
+    t = ChromeTarget("https://x.test/a", browser_factory=f)
+    b = t.browser
+    b.target, b.session = "T1", "S1"
+    calls = []
+    state = {"phase": 0}
+
+    def fake_cdp(method, **params):
+        calls.append((method, params))
+        if method == "Target.getTargets":
+            infos = [{"targetId": "T1", "type": "page", "url": "https://x.test/a"}]
+            if state["phase"]:
+                infos += targets_after
+            return {"targetInfos": infos}
+        if method == "Target.attachToTarget":
+            return {"sessionId": "S2"}
+        return {}
+    monkeypatch.setattr("jev_runner.targets.chrome._cdp", fake_cdp)
+    monkeypatch.setattr("jev_runner.targets.chrome._sleep", lambda s: None)
+    orig_act = b.act
+    def act(action, page, text=None):
+        state["phase"] = 1  # the click opened something
+        return orig_act(action, page, text)
+    b.act = act
+    return t, b, calls
+
+
+def test_click_that_opens_a_tab_moves_the_session_there_and_closes_the_old_tab_later(monkeypatch):
+    t, b, calls = _tab_target(monkeypatch, [{"targetId": "T2", "type": "page", "openerId": "T1",
+                                             "url": "https://x.test/audit"}])
+    t.act({"id": "e1", "kind": "click", "node": 3, "label": "Audit logs"}, {"marker": 1})
+    assert (b.target, b.session) == ("T2", "S2")
+    assert ("Target.attachToTarget", {"targetId": "T2", "flatten": True}) in calls
+    assert any(m == "Emulation.setDeviceMetricsOverride" for m, _ in b.calls)
+    t.close()
+    assert ("Target.closeTarget", {"targetId": "T1"}) in calls  # the tab it came from
+
+
+def test_tabs_not_opened_by_this_tab_are_ignored(monkeypatch):
+    t, b, calls = _tab_target(monkeypatch, [{"targetId": "T9", "type": "page", "openerId": "OTHER",
+                                             "url": "https://x.test/else"}])
+    t.act({"id": "e1", "kind": "click", "node": 3, "label": "X"}, {"marker": 1})
+    assert (b.target, b.session) == ("T1", "S1")
+    assert not any(m == "Target.attachToTarget" for m, _ in calls)
+
+
+def test_fill_and_scroll_do_not_look_for_new_tabs(monkeypatch):
+    t, b, calls = _tab_target(monkeypatch, [{"targetId": "T2", "type": "page", "openerId": "T1"}])
+    t.act({"id": "e1", "kind": "fill", "node": 3, "label": "Search"}, {"marker": 1}, text="a")
+    assert not any(m == "Target.getTargets" for m, _ in calls)
