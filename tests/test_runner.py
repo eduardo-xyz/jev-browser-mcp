@@ -433,3 +433,61 @@ def test_stale_page_result_says_which_action_was_refused(cfg):
     out = r.run()
     assert out["status"] == "error" and out["reason"] == "stale_page"
     assert out["detail"] == {"action": "click · Save", "why": "Target changed or is covered.", "strike": 3}
+
+
+# --- a page that says it is loading is waited for, not judged ------------------------------------
+
+def test_loading_page_is_waited_for_without_asking_the_model(cfg, monkeypatch):
+    monkeypatch.setattr("jev_runner.runner.LOAD_PATIENCE", 20.0)
+    monkeypatch.setattr("jev_runner.runner.LOAD_POLL", 0.0)
+    shell = page(url="https://a/c", text="Nav only"); shell["loading"] = True
+    body = page(click("n1", "Audit logs"), url="https://a/c", text="the contact")
+    t = FakeTarget([shell, shell, shell, body], advance_on_observe=3)
+    calls = []
+    choose = scripted_choose(["DONE"])
+    r = Runner("s1", t, "read it", None, cfg,
+               choose=lambda page, goal, history: calls.append(page) or choose(page, goal, history))
+    out = r.run()
+    assert out["status"] == "done" and len(calls) == 1  # Jev never saw the shell
+    assert not calls[0].get("loading") and "the contact" in calls[0]["text"]
+
+
+def test_loading_patience_is_bounded(cfg, monkeypatch):
+    monkeypatch.setattr("jev_runner.runner.LOAD_PATIENCE", 20.0)
+    monkeypatch.setattr("jev_runner.runner.LOAD_POLL", 10.0)  # two polls exhaust LOAD_PATIENCE
+    monkeypatch.setattr("jev_runner.runner.time.sleep", lambda s: None)
+    shell = page(click("n1", "X"), url="https://a/c", text="Nav only"); shell["loading"] = True
+    r = Runner("s1", FakeTarget([shell]), "read it", None, cfg, choose=scripted_choose(["BLOCKED"]))
+    out = r.run()
+    assert out["status"] == "blocked" and out["reason"] == "jev_blocked"  # still loading after patience: Jev decides
+
+
+def test_loading_gap_between_loader_and_skeleton_is_bridged(cfg, monkeypatch):
+    monkeypatch.setattr("jev_runner.runner.LOAD_PATIENCE", 20.0)
+    monkeypatch.setattr("jev_runner.runner.LOAD_POLL", 0.0)
+    class Chrome(FakeTarget):
+        kind = "chrome"
+    loader = page(url="https://a/c", text="Nav only shell text here"); loader["loading"] = True
+    gap = page(click("n1", "Menu"), url="https://a/c", text="Nav only shell text here, nothing more yet")
+    skeleton = page(click("n1", "Menu"), url="https://a/c", text="Nav only shell text here"); skeleton["loading"] = True
+    body = page(click("n2", "Audit logs"), url="https://a/c", text="the contact, fully rendered now, with all of its text")
+    t = Chrome([loader, gap, skeleton, skeleton, body], advance_on_observe=4)
+    seen = []
+    choose = scripted_choose(["DONE"])
+    r = Runner("s1", t, "read it", None, cfg,
+               choose=lambda page, goal, history: seen.append(page["text"]) or choose(page, goal, history))
+    assert r.run()["status"] == "done" and seen == [body["text"]]
+
+
+def test_near_empty_web_page_counts_as_loading(cfg, monkeypatch):
+    monkeypatch.setattr("jev_runner.runner.LOAD_PATIENCE", 20.0)
+    monkeypatch.setattr("jev_runner.runner.LOAD_POLL", 0.0)
+    class Chrome(FakeTarget):
+        kind = "chrome"
+    blank = page(click("n1", "X"), url="https://a/c", text="Loading")
+    full = page(click("n1", "X"), url="https://a/c", text="A whole page worth of text is visible here now.")
+    seen = []
+    choose = scripted_choose(["DONE"])
+    r = Runner("s1", Chrome([blank, blank, full], advance_on_observe=2), "read", None, cfg,
+               choose=lambda page, goal, history: seen.append(page["text"]) or choose(page, goal, history))
+    assert r.run()["status"] == "done" and seen == [full["text"]]

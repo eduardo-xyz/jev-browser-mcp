@@ -939,3 +939,32 @@ def test_shadow_action_refused_before_input_is_a_stale_page():
     with pytest.raises(StalePage):
         t.act({"id": "e1", "kind": "click", "node": 5, "shadow": True}, {})
     assert not any(m.startswith("Input.") for m, _ in b.calls)
+
+
+# --- covered controls are dropped; loading is flagged -------------------------------------------
+
+def _observe_with(post_result, actions):
+    f = FakeBrowserFactory(["complete"])
+    t = ChromeTarget("https://x.test/a", browser_factory=f)
+    b = t.browser
+    b.observe = lambda screenshot=True: {"url": "https://x.test/a", "title": "T", "text": "hi",
+                                         "actions": [dict(a) for a in actions]}
+    orig = b.evaluate
+    b.evaluate = lambda expr: post_result if "loadingSel" in expr else orig(expr)
+    return t.observe()
+
+
+def test_covered_controls_are_dropped_from_the_actions():
+    acts = [{"id": "e1", "node": 1, "kind": "fill", "label": "Search by title", "role": "textbox"},
+            {"id": "e2", "node": 2, "kind": "click", "label": "Close", "role": "button"},
+            {"id": "wait", "kind": "wait", "label": "Wait"}]
+    page = _observe_with({"covered": [1], "loading": False}, acts)
+    assert [a["id"] for a in page["actions"]] == ["e2", "wait"] and page["covered"] == 1
+    assert page["loading"] is False
+
+
+def test_loading_flag_and_tolerance_of_a_failed_probe():
+    acts = [{"id": "e1", "node": 1, "kind": "click", "label": "X", "role": "button"}]
+    assert _observe_with({"covered": [], "loading": True}, acts)["loading"] is True
+    page = _observe_with("not a dict", acts)  # probe failed: nothing dropped, no flag
+    assert [a["id"] for a in page["actions"]] == ["e1"] and "loading" not in page

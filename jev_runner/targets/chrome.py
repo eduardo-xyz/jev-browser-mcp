@@ -587,6 +587,32 @@ _RESOLVE_SHADOW_FN = """((action) => {
 })"""
 
 
+# After upstream's observe: which observed controls are occluded (a click at their centre would land
+# on an unrelated element, which is exactly what the pre-input hit test refuses later), and whether
+# the page is still loading (visible spinner/skeleton/loader elements, or the document not complete).
+# Seen: a panel opened by a mis-labelled icon covered a search field; Jev tried to fill it three times
+# and the run died as stale_page. And a contact page shows loaders for ~9 s while its text is only the
+# navigation shell; Jev answered BLOCKED after one wait.
+_LOADING_SELECTOR = ("[aria-busy='true'],[role='progressbar'],[class*='skeleton'],[class*='spinner'],"
+                     "[class*='loader'],[class*='loading']")
+_POST_OBSERVE_FN = """((nodes, loadingSel) => {
+  const c = window.__jevFast; const covered = [];
+  if (c) for (const n of nodes) {
+    const e = c.nodes.get(n); if (!e || !e.isConnected) { covered.push(n); continue; }
+    const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    let hit = document.elementFromPoint(x, y);
+    while (hit && hit.shadowRoot) { const d = hit.shadowRoot.elementFromPoint(x, y); if (!d || d === hit) break; hit = d; }
+    if (hit && !(e === hit || e.contains(hit))) covered.push(n);
+  }
+  let loading = document.readyState !== 'complete';
+  if (!loading) for (const e of document.querySelectorAll(loadingSel)) {
+    try { if (e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) { loading = true; break; } } catch (_) {}
+  }
+  return {covered, loading};
+})"""
+
+
 _NODE_FRESH = ("(() => { const c=window.__jevFast; "
                "return c ? [c.pageKey(), c.guard(c.nodes.get(%d))] : null; })()")
 
@@ -733,11 +759,33 @@ class ChromeTarget:
         if n and os.environ.get("JEV_DEBUG_IFRAME"):
             _log.info("labels: synthesized %d top-frame label(s)", n)
         self._merge_iframe_actions(page)
+        self._drop_covered_and_flag_loading(page)
         page["readable"] = True
         if self._grouping and _monotonic() - self._last_tab_ping > _TAB_ACTIVITY_EVERY:
             self._last_tab_ping = _monotonic()  # keep the claimed tab alive past the broker's sweep
             tab_groups.activity([self._tab])
         return page
+
+    def _drop_covered_and_flag_loading(self, page: dict) -> None:
+        """Remove controls an element outside them is sitting on (a panel, a sticky bar, a dialog
+        backdrop): act() would refuse them anyway, so offering them only buys stale_page strikes.
+        Sets page["loading"] while spinners/skeletons are visible, so the runner waits on its own
+        instead of asking Jev about a page that is still arriving."""
+        actions = page.get("actions") or []
+        nodes = [a["node"] for a in actions
+                 if type(a.get("node")) is int and a.get("frame") is None and not a.get("file_input")]
+        try:
+            res = self.browser.evaluate(f"{_POST_OBSERVE_FN}({json.dumps(nodes)}, "
+                                        f"{json.dumps(_LOADING_SELECTOR)})")
+        except Exception:
+            return  # never let this break a normal observe
+        if not isinstance(res, dict):
+            return
+        covered = set(res.get("covered") or [])
+        if covered:
+            page["actions"] = [a for a in actions if a.get("node") not in covered or a.get("frame") is not None]
+            page["covered"] = len(covered)
+        page["loading"] = bool(res.get("loading"))
 
     def _merge_iframe_actions(self, page: dict) -> None:
         """Surface actions from cross-origin (OOPIF) child frames so Jev can choose them. Each gets

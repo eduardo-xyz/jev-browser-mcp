@@ -39,3 +39,10 @@ def _no_wait_settle(monkeypatch):
     # the post-wait settle spends real wall-clock letting late content appear; off by default in
     # tests (a test that exercises it re-sets WAIT_SETTLE/WAIT_POLL to small values itself)
     monkeypatch.setattr("jev_runner.runner.WAIT_SETTLE", 0)
+
+
+@pytest.fixture(autouse=True)
+def _no_load_patience(monkeypatch):
+    # waiting on a loading web page spends real wall-clock (0.5 s polls, up to 20 s); off by default
+    # in tests (a test that exercises it sets LOAD_PATIENCE/LOAD_POLL itself)
+    monkeypatch.setattr("jev_runner.runner.LOAD_PATIENCE", 0)

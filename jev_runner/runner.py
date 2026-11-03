@@ -43,6 +43,10 @@ _log = logging.getLogger("jevd")
 UNREADABLE_TRIES = 3
 NO_PROGRESS = 3
 MAX_WAITS = 3  # a churny SPA never looks "settled"; after this many waits, force a real decision
+LOAD_PATIENCE = 20.0  # s per run spent waiting on our own while the target reports page["loading"]
+LOAD_POLL = 0.5
+LOAD_MIN_TEXT = 40  # a web page showing fewer characters than this is treated as still loading
+LOAD_CLEAR_READS = 2  # consecutive non-loading reads required after a loading phase
 WAIT_SETTLE = 12.0  # max seconds a chosen "wait" may spend letting a page finish loading late
 #                     content (a SPA that mounts a cross-origin iframe seconds after its shell
 #                     renders); upstream's wait sleeps only 0.1s, far too short for that.
@@ -165,6 +169,8 @@ class Runner:
         self._stale = 0
         self._signin_reloaded = False  # one reload of the start URL per run on a sign-in bounce
         self.last_stale: dict | None = None  # why the last action was refused as stale (result detail)
+        self._load_waited = 0.0  # seconds spent waiting on a loading page without asking Jev
+        self._load_clear = LOAD_CLEAR_READS  # clear reads since the last loading one (none seen yet)
         self._obs_log: list[tuple[str, str]] = []  # recent (where, text): a field can scroll off
 
     def run(self) -> dict:
@@ -393,6 +399,13 @@ class Runner:
         if self._no_progress():
             raise _Stop("blocked", "no_progress")
         page = self._observe()
+        if self._still_loading(page):
+            # Spinners/skeletons still visible (or a near-empty page): the page is arriving. Asking
+            # Jev now gets a "wait" at best and a BLOCKED on the empty shell at worst; look again.
+            self._load_waited += LOAD_POLL
+            self._timed("observe_ms", time.sleep, LOAD_POLL)
+            self.page = {}
+            return
         if (getattr(self.target, "kind", None) == "chrome" and not self._signin_ok
                 and signin.is_signin_page(page)):
             if self._reload_once_on_signin(page):
@@ -432,6 +445,21 @@ class Runner:
                       self._stale, label, self.last_stale["why"])
             if self._stale >= 3:
                 raise
+
+    def _still_loading(self, page: dict) -> bool:
+        """Wait on our own while the target flags loading, while a web page has almost no text yet,
+        and for two more reads after a loading phase ends (a loader is often followed by a skeleton
+        a second or two later). Bounded by LOAD_PATIENCE per run, then Jev decides."""
+        if self._load_waited >= LOAD_PATIENCE:
+            return False
+        chrome = getattr(self.target, "kind", None) == "chrome"
+        if page.get("loading") or (chrome and len((page.get("text") or "").strip()) < LOAD_MIN_TEXT):
+            self._load_clear = 0  # a loading phase was seen: demand clear reads after it
+            return True
+        if self._load_clear < LOAD_CLEAR_READS:
+            self._load_clear += 1
+            return True
+        return False
 
     @staticmethod
     def _choice_label(decision, page: dict) -> str:
@@ -488,7 +516,7 @@ class Runner:
                 stable += 1
                 if stable >= WAIT_STABLE and fp != origin:
                     return  # new content appeared and has settled
-                if fp == origin and time.monotonic() - start >= WAIT_STATIC:
+                if fp == origin and time.monotonic() - start >= WAIT_STATIC and not self.page.get("loading"):
                     return  # nothing has changed at all: don't spend the whole window on it
             else:
                 prev, stable = fp, 0

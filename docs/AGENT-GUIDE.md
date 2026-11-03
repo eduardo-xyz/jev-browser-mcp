@@ -54,8 +54,11 @@ A signed-in web app can still bounce one fresh load of a deep link to its login 
 session token mid-refresh). Jev reloads the start URL once before reporting `signed_out`; a truly
 signed-out Chrome lands on the login page again and blocks as before.
 
-Pages built from web components (shadow DOM) are read through their shadow roots, and their controls
-are clicked there too. A page whose observe comes back with empty `text` after it has settled really
+While a page shows loaders or skeletons (or almost no text), the runner looks again on its own, up to
+20 s per run, before asking Jev anything: no more BLOCKED on a navigation shell. Controls that another
+element is sitting on (an open panel, a sticky bar) are left out of the observed actions, since a click
+there would land on the covering element. Pages built from web components (shadow DOM) are read through
+their shadow roots, and their controls are clicked there too. A page whose observe comes back with empty `text` after it has settled really
 shows nothing in the viewport (one such GHL route renders only a single-button overlay): check the URL
 in a browser before blaming the tool.
 
