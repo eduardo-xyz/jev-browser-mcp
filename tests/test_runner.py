@@ -364,3 +364,35 @@ def test_no_press_retry_for_destructive(cfg):
     assert r.run()["status"] == "paused_confirm"
     r.resume(confirm=True)
     assert t.pressed == []
+
+
+def test_result_reports_timing_per_phase(cfg):
+    t = FakeTarget([page(click("n1", "Siguiente")), page()])
+    r = Runner("s1", t, "go", None, cfg, choose=scripted_choose(["n1", "DONE"]))
+    out = r.run()
+    assert {"observe_ms", "decide_ms", "act_ms"} <= set(out["timing"])
+    assert all(isinstance(v, int) and v >= 0 for v in out["timing"].values())
+
+
+def test_refresh_target_is_read_once_per_step(cfg):
+    # A target whose freshness check costs a full screen read (android) offers refresh(): the
+    # runner then reads once per tick instead of a check plus a re-read.
+    class Refreshing(FakeTarget):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.reads = 0
+
+        def observe(self):
+            self.reads += 1
+            return super().observe()
+
+        def refresh(self, page):
+            return self.observe()
+
+        def fresh(self, page):
+            raise AssertionError("fresh() must not be called when refresh() exists")
+
+    t = Refreshing([page(click("n1", "A")), page(click("n2", "B")), page()])
+    r = Runner("s1", t, "go", None, cfg, choose=scripted_choose(["n1", "n2", "DONE"]))
+    assert r.run()["status"] == "done"
+    assert t.reads == 5  # 2 steps x (read before deciding + read after acting) + the DONE tick

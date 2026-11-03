@@ -54,6 +54,7 @@ class Session:
     lock: threading.Lock = field(default_factory=threading.Lock)
     closed: bool = False
     run_started: float = 0.0  # epoch seconds the current run_task began (downloads since then)
+    setup_ms: float | None = None  # connect/launch time, reported in the session's first result
 
     def idle_since(self) -> float:
         runner_used = self.runner.last_used if self.runner is not None else 0.0
@@ -140,6 +141,9 @@ class Daemon:
         """Run a Runner call under the session lock; BaseExceptions keep the session."""
         runner = session.runner
         try:
+            if session.setup_ms is not None and isinstance(getattr(runner, "timing", None), dict):
+                runner.timing["setup_ms"] = session.setup_ms  # connect/launch: paid once per session
+                session.setup_ms = None
             out = fn()
             self._add_downloads(session, out)
             self._record_run(session, out)
@@ -322,6 +326,7 @@ class Daemon:
                     raise OpError(f"device_busy: {holder} (status=starting; "
                                   "pass session_id or end_session)")
                 self.devices[key] = sid  # reserve before the (slow) connect
+        t0 = time.perf_counter()
         try:
             t = self.target_factory(target, url_or_app, device)
         except BaseException as e:
@@ -337,6 +342,7 @@ class Daemon:
             raise
         self.targets_created += 1
         session = Session(sid, target, t, url_or_app, key)
+        session.setup_ms = (time.perf_counter() - t0) * 1000
         with self._lock:
             self.sessions[sid] = session
         return session

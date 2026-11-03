@@ -43,6 +43,9 @@ def build(runner) -> dict:
     flow = getattr(runner, "flow", None)
     if flow is not None:
         out["flow_used"] = flow.name
+    timing = getattr(runner, "timing", None)
+    if timing:  # where the run's time went, ms per phase (helps spot a slow device or model)
+        out["timing"] = {k: round(v) for k, v in timing.items()}
     # belt and braces: no typed secret may reach a tool result, whatever field it hides in.
     # Identifiers are left alone: masking one would make the session or flow unreachable.
     ids = {k: out.pop(k) for k in ("session_id", "flow_saved", "flow_updated", "flow_used") if k in out}

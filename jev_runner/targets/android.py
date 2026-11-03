@@ -13,6 +13,27 @@ _LAUNCHER_CMD = (
     "-c android.intent.category.LAUNCHER"
 )
 _COMPONENT = re.compile(r"^(\S+?)/\S+$")
+# Foreground window + keyboard state in ONE shell round trip (~0.2 s over Wi-Fi). adbutils'
+# app_current() tries `dumpsys window windows` (no match on recent Android), then falls through to
+# `dumpsys activity top`, which dumps every activity's view tree: ~10 s on a Pixel, per screen read.
+_FOCUS_CMD = ("dumpsys window 2>/dev/null | grep -m1 mCurrentFocus; "
+              "dumpsys input_method 2>/dev/null | grep -m1 mInputShown")
+_RESUMED_CMD = ("dumpsys activity activities 2>/dev/null | grep -m1 -E "
+                "'topResumedActivity|ResumedActivity:'")
+_COMPONENT_IN_RECORD = re.compile(r"\bu\d+ (\S+?)/(\S+?)[}\s]")
+
+
+def _focused_component(out: str) -> tuple[str | None, str | None]:
+    """(package, activity) from a Window{… u0 pkg/act} or ActivityRecord{… u0 pkg/act t1} line;
+    (None, None) when the focused window is not an app (null, the shade, a popup)."""
+    m = _COMPONENT_IN_RECORD.search(out or "")
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def _short_activity(pkg: str, act: str) -> str:
+    """`com.whatsapp/com.whatsapp.Conversation` -> `.Conversation`: the form `dumpsys activity top`
+    reports and every saved flow's `where` was recorded in."""
+    return act[len(pkg):] if pkg and act.startswith(pkg + ".") else act
 
 
 def adb_input_text_arg(text: str) -> str | None:
@@ -146,7 +167,7 @@ class AndroidTarget:
         self._dev()
         if app:
             pkg = app if "." in app else self._call(lambda d: resolve_app(d, app, self._labels))
-            cur = (self._call(lambda d: d.app_current()) or {}).get("package")
+            cur = self._call(self._foreground).get("package")
             # Never yank an app to the front over a system share sheet: it aborts the share
             # (launching over a share chooser aborts the share).
             if cur != pkg and cur not in _NO_RELAUNCH_OVER:
@@ -189,7 +210,7 @@ class AndroidTarget:
 
     def observe(self) -> dict:
         def read(d):
-            info = d.app_current()
+            info = self._foreground(d)
             xml = d.dump_hierarchy(compressed=False)
             p = parse_hierarchy(xml, info["package"], info["activity"])
             if not p["readable"] and not p["shade_open"]:
@@ -203,24 +224,32 @@ class AndroidTarget:
                         p = alt
             if p["shade_open"]:
                 p = parse_hierarchy(xml, info["package"], info["activity"], include_system_ui=True)
+            if info.get("keyboard"):
+                # The IME can cover the button a step needs; give Jev an explicit way to dismiss it.
+                p["actions"].append({"id": "hide_keyboard", "kind": "hide_keyboard",
+                                     "label": "Hide the on-screen keyboard"})
             return p
 
-        p = self._call(read)
-        if self._keyboard_shown():
-            # The IME can cover the button a step needs; give Jev an explicit way to dismiss it.
-            p["actions"].append({"id": "hide_keyboard", "kind": "hide_keyboard",
-                                 "label": "Hide the on-screen keyboard"})
-        return p
+        return self._call(read)
 
-    def _keyboard_shown(self) -> bool:
-        try:
-            out = self._call(lambda d: d.shell("dumpsys input_method").output)
-        except Exception:
-            return False
-        return "mInputShown=true" in (out or "")
+    def _foreground(self, d) -> dict:
+        """{package, activity, keyboard} of the screen, in one shell round trip (see _FOCUS_CMD)."""
+        out = _shell_text(d.shell(_FOCUS_CMD))
+        pkg, act = _focused_component(out)
+        if pkg is None:  # focus is on the shade/a popup/nothing: the app resumed under it
+            pkg, act = _focused_component(_shell_text(d.shell(_RESUMED_CMD)))
+        if pkg is None:  # mid-transition: adbutils' slow but thorough path
+            info = d.app_current() or {}
+            pkg, act = info.get("package") or "", info.get("activity") or ""
+        return {"package": pkg, "activity": _short_activity(pkg, act),
+                "keyboard": "mInputShown=true" in out}
 
     def fresh(self, page: dict) -> bool:
         return self.observe()["fingerprint"] == page["fingerprint"]
+
+    def refresh(self, page: dict) -> dict:
+        """The current screen in one read: a freshness check costs a full read here anyway."""
+        return self.observe()
 
     def _input(self, fn):
         """Send input once. A connection error here is never retried: input may have landed."""

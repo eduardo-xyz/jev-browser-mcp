@@ -814,3 +814,12 @@ def test_daemon_python_prefers_repo_venv(tmp_path, monkeypatch):
     venv.parent.mkdir(parents=True)
     venv.write_text("")
     assert client.daemon_python() == str(venv)  # a client run from system python3 still works
+
+
+def test_setup_time_is_reported_once_per_session(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    d.script.choices = [["DONE"], ["DONE"]]
+    first = run(d, target="android", goal="a", url_or_app="com.app")["result"]
+    assert "setup_ms" in first["timing"]  # connecting + launching the app, paid by the first run
+    again = run(d, target="android", goal="b", session_id=first["session_id"])["result"]
+    assert "setup_ms" not in again["timing"] and "observe_ms" in again["timing"]

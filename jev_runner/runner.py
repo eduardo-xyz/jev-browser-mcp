@@ -132,6 +132,7 @@ class Runner:
         self.model_calls = 0
         self.loop_events = 0  # times a cycle was detected (auto-recover drop or hard stop)
         self.elapsed_ms = 0
+        self.timing: dict[str, float] = {}  # ms per phase: observe, decide, text, act, verify
         self.secrets: list[str] = []
         self._secret_fields: set = set()  # locators of fields a secret was typed into
         self.pending: dict | None = None
@@ -194,6 +195,9 @@ class Runner:
             self.status, self.reason = "error", msg[:200]
         finally:
             self._touch()
+        _log.info("session=%s status=%s steps=%d model_calls=%d elapsed_ms=%d timing=%s",
+                  self.session_id, self.status, len(self.history), self.model_calls,
+                  self.elapsed_ms, {k: round(v) for k, v in self.timing.items()})
         if self.status == "done":
             self._save_flow()
         return result.build(self)
@@ -378,7 +382,7 @@ class Runner:
         while time.monotonic() < deadline:
             time.sleep(WAIT_POLL)
             try:
-                fp = self.target.observe().get("fingerprint")
+                fp = self._read().get("fingerprint")
             except StalePage:
                 return
             if fp == prev:
@@ -396,13 +400,16 @@ class Runner:
 
     def _observe(self) -> dict:
         page = self.page
-        if not page or not self.target.fresh(page):
-            page = self.target.observe()
+        refresh = getattr(self.target, "refresh", None)
+        if page and refresh is not None:
+            page = self._timed("observe_ms", refresh, page)  # one read: no separate freshness check
+        elif not page or not self._timed("observe_ms", self.target.fresh, page):
+            page = self._read()
         for i in range(UNREADABLE_TRIES - 1):
             if page.get("readable", True):
                 break
             time.sleep(0.5)
-            page = self.target.observe()
+            page = self._read()
         if not page.get("readable", True):
             self.page = page
             raise _Stop("blocked", "screen_unreadable")
@@ -410,6 +417,17 @@ class Runner:
         self._obs_log.append((page.get("url", ""), page.get("text") or ""))
         del self._obs_log[:-4]
         return page
+
+    def _read(self) -> dict:
+        return self._timed("observe_ms", self.target.observe)
+
+    def _timed(self, key: str, fn, *args, **kwargs):
+        """Run fn, adding its wall-clock to self.timing[key] (reported as `timing` in results)."""
+        t0 = time.perf_counter()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            self.timing[key] = self.timing.get(key, 0.0) + (time.perf_counter() - t0) * 1000
 
     def _money_text(self, page: dict) -> str:
         """Scrubbed text of the current screen plus any just-seen text of the same screen: a
@@ -423,7 +441,7 @@ class Runner:
 
     def _decide(self, view: dict) -> dict:
         self.model_calls += 1
-        decision = self._choose(view, self.goal, self.history)
+        decision = self._timed("decide_ms", self._choose, view, self.goal, self.history)
         if os.environ.get("JEV_DEBUG_IFRAME"):
             probs = decision.get("probabilities", {}) or {}
             top = dict(sorted(probs.items(), key=lambda kv: -kv[1])[:4])
@@ -525,7 +543,7 @@ class Runner:
         """Re-read until two reads agree, so a pause never records a screen still animating."""
         for _ in range(tries):
             time.sleep(self.settle_delay)
-            again = self.target.observe()
+            again = self._read()
             if (again.get("fingerprint") == page.get("fingerprint")
                     and self._text_hash(again) == self._text_hash(page)):
                 break
@@ -605,7 +623,8 @@ class Runner:
     def _check(self, page: dict) -> bool | None:
         """Second opinion on Jev's verdict from the text model; None when unavailable."""
         check = self._verify or verify_mod.check
-        ok, why = check(self.goal, scrub(page, self.secrets), self.history)  # text model: not in model_calls
+        ok, why = self._timed("verify_ms", check, self.goal, scrub(page, self.secrets),
+                              self.history)  # text model: not in model_calls
         self.verified = ok
         self._verify_reason = scrub({"text": why}, self.secrets)["text"][:200] if why else ""
         return ok
@@ -657,7 +676,7 @@ class Runner:
         ctx = model.field_context(self.goal, scrub_value(action, self.secrets),
                                   scrub(page, self.secrets), self.history)
         try:
-            text, _ = self._field_text(ctx)
+            text, _ = self._timed("text_ms", self._field_text, ctx)
         except ValueError:
             raise _Stop("blocked", "missing_value")
         return text
@@ -674,7 +693,7 @@ class Runner:
         if money:
             before, self.money_attempted = self.money_attempted, True
             try:
-                self.target.act(action, page, text=text, verify=True)
+                self._timed("act_ms", self.target.act, action, page, text=text, verify=True)
             except StalePage:
                 self.money_attempted = before  # refused before tapping: nothing moved
                 raise
@@ -687,9 +706,9 @@ class Runner:
             self.executed_money = True
             self.pending = None  # tapped: a crash below must not leave a confirmable pending
         elif verify:
-            self.target.act(action, page, text=text, verify=True)
+            self._timed("act_ms", self.target.act, action, page, text=text, verify=True)
         else:
-            self.target.act(action, page, text=text)
+            self._timed("act_ms", self.target.act, action, page, text=text)
         # From here the action has executed: nothing below may trigger the pre-act retry path.
         self._stale = 0
         entry = history_entry(scrub_value(action, self.secrets), scrub(page, self.secrets), text,
@@ -704,7 +723,7 @@ class Runner:
         if action.get("kind") == "wait":
             self._settle_after_wait(page)  # let late async content (e.g. a mounting iframe) appear
         try:
-            self.page = after = self.target.observe()
+            self.page = after = self._read()
         except StalePage:
             self.page = {}
             return
@@ -712,9 +731,9 @@ class Runner:
                 and may_retry_tap(action, self.cfg) and hasattr(self.target, "press"):
             # Some web views ignore a quick tap; look again, then press and hold briefly once.
             time.sleep(self.settle_delay * 2)
-            after = self.page = self.target.observe()
+            after = self.page = self._read()
             if not self._changed(page, after):
-                self.target.press(action)
+                self._timed("act_ms", self.target.press, action)
                 entry["pressed"] = True
-                after = self.page = self.target.observe()
+                after = self.page = self._read()
         entry["page_changed"] = after.get("fingerprint") != page.get("fingerprint")

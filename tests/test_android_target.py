@@ -525,3 +525,56 @@ def test_input_text_arg_refuses_literal_percent():
     # %s is our space encoding, so a literal % is ambiguous over this transport: signal fallback
     assert adb_input_text_arg("50%off") is None
     assert adb_input_text_arg("abc") is not None
+
+
+# --- foreground app + keyboard in one shell round trip (adbutils' app_current takes ~10 s) ---
+
+def test_focused_component_parsing():
+    from jev_runner.targets import android as mod
+    assert mod._focused_component(
+        "mCurrentFocus=Window{93ac883 u0 com.whatsapp/com.whatsapp.Conversation}"
+    ) == ("com.whatsapp", "com.whatsapp.Conversation")
+    assert mod._focused_component(
+        "topResumedActivity=ActivityRecord{2 u0 com.app/.Main t12}") == ("com.app", ".Main")
+    assert mod._focused_component("mCurrentFocus=null") == (None, None)
+    assert mod._focused_component("mCurrentFocus=Window{1 u0 NotificationShade}") == (None, None)
+    assert mod._short_activity("com.whatsapp", "com.whatsapp.Conversation") == ".Conversation"
+    assert mod._short_activity("com.whatsapp", "com.other.Activity") == "com.other.Activity"
+
+
+def _never():
+    raise AssertionError("slow app_current path used")
+
+
+def test_observe_reads_foreground_in_one_shell_call(fake_device, link):
+    fake_device.shell_out = ("mCurrentFocus=Window{93ac883 u0 net.bac.sbe.android/net.bac.sbe.android.ui.Main}\n"
+                             "      mInputShown=true\n")
+    fake_device.app_current = _never
+    p = mk(link, fake_device).observe()
+    assert p["url"] == "net.bac.sbe.android/.ui.Main"  # short form, as saved flows record it
+    assert any(a["id"] == "hide_keyboard" for a in p["actions"])
+
+
+def test_observe_falls_back_to_resumed_activity_when_focus_is_not_an_app(fake_device, link):
+    answers = {"mCurrentFocus": "mCurrentFocus=Window{1 u0 NotificationShade}\n mInputShown=false",
+               "topResumedActivity": "topResumedActivity=ActivityRecord{2 u0 net.bac.sbe.android/.Home t12}"}
+    fake_device.shell = lambda cmd: SimpleNamespace(
+        output=next((v for k, v in answers.items() if k in cmd), ""))
+    fake_device.app_current = _never
+    p = mk(link, fake_device).observe()
+    assert p["url"] == "net.bac.sbe.android/.Home"
+    assert not any(a["id"] == "hide_keyboard" for a in p["actions"])
+
+
+def test_observe_uses_app_current_only_when_nothing_is_focused(fake_device, link):
+    fake_device.shell_out = "mCurrentFocus=null\n"
+    p = mk(link, fake_device).observe()
+    assert p["url"] == "net.bac.sbe.android/Main"  # from the fake's app_current
+
+
+def test_refresh_is_one_read(fake_device, link):
+    t = mk(link, fake_device)
+    p = t.observe()
+    before = fake_device.dumps
+    assert t.refresh(p)["fingerprint"] == p["fingerprint"]
+    assert fake_device.dumps == before + 1
