@@ -32,6 +32,8 @@ def build(runner) -> dict:
         out["reason"] = runner.reason
         if runner.reason in HINTS:
             out["hint"] = HINTS[runner.reason]
+    if runner.reason == "stale_page" and getattr(runner, "last_stale", None):
+        out["detail"] = runner.last_stale  # which action was refused and why (for bug reports)
     for key in ("field", "expected", "seen", "control"):
         if runner.pending and key in runner.pending:
             out[key] = runner.pending[key]

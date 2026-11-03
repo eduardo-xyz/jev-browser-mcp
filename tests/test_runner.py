@@ -410,3 +410,26 @@ def test_wait_on_a_static_screen_stops_early(cfg, monkeypatch):
     t0 = time.monotonic()
     assert r.run()["status"] == "done"
     assert time.monotonic() - t0 < 1.0
+
+
+# --- loop guards on a page whose text churns ---------------------------------------------------
+
+def test_same_click_on_a_churning_screen_is_caught_as_a_loop(cfg):
+    """Each read of a contact page differs (live timestamps), so the exact fingerprint never
+    repeats; the same tab click five times in a row used to run to max_steps."""
+    pages = [page(click("n1", "Audit logs"), click("n2", "Notes"), url="https://a/c/1", text=f"{i} min ago")
+             for i in range(8)]
+    t = FakeTarget(pages)
+    r = Runner("s1", t, "read the audit log", None, cfg, choose=scripted_choose(["n1"] * 8), max_steps=8)
+    out = r.run()
+    assert out["status"] == "blocked" and out["reason"] == "stuck_in_loop"
+    assert len(r.history) <= 4 and r.loop_events >= 1
+
+
+def test_stale_page_result_says_which_action_was_refused(cfg):
+    from jev_runner.targets.base import StalePage
+    t = FakeTarget([page(click("n1", "Save")), page()], raise_on_act=StalePage("Target changed or is covered."))
+    r = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["n1"] * 4))
+    out = r.run()
+    assert out["status"] == "error" and out["reason"] == "stale_page"
+    assert out["detail"] == {"action": "click · Save", "why": "Target changed or is covered.", "strike": 3}

@@ -492,6 +492,101 @@ def _wait_loaded(b, timeout: float = LOAD_TIMEOUT) -> bool:
         _sleep(_POLL)
 
 
+# --- shadow DOM --------------------------------------------------------------------------------
+# Upstream's snapshot reads document.querySelectorAll and a TreeWalker over document.body: both
+# stop at shadow roots, so a page built from web components (a GHL calendar: 2 shadow hosts,
+# thousands of characters, body.innerText empty) observes as blank with no controls, and Jev
+# reports BLOCKED or clicks a tab whose panel it cannot see. The snapshot is patched by string
+# substitution at the anchors below; if upstream changes and an anchor is missing, the original
+# snapshot is kept and a warning logged. Controls found inside a shadow root carry `shadow: true`
+# and are acted on by _act_shadow (upstream's hit test, document.elementFromPoint, returns the
+# host for them, so it would refuse every such click as "covered").
+_SHADOW_HELPERS = """
+  const deepAll=(root,sel,out=[])=>{for (const e of root.querySelectorAll(sel)) out.push(e);
+    for (const h of root.querySelectorAll('*')) if (h.shadowRoot) deepAll(h.shadowRoot,sel,out); return out;};
+  const deepText=(root,visit)=>{const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT|NodeFilter.SHOW_ELEMENT);
+    let n; while ((n=w.nextNode())) { if (n.nodeType===3) { if (visit(n)===false) return false; }
+      else if (n.shadowRoot && deepText(n.shadowRoot,visit)===false) return false; } return true;};
+"""
+_SHADOW_ANCHORS = (
+    ("  for (const [id,e] of cache.nodes) if (!e.isConnected) cache.nodes.delete(id);\n",
+     "  for (const [id,e] of cache.nodes) if (!e.isConnected) cache.nodes.delete(id);\n" + _SHADOW_HELPERS),
+    ("[...document.querySelectorAll('input,textarea,select')]", "deepAll(document,'input,textarea,select')"),
+    ("for (const e of document.querySelectorAll(selector)) {", "for (const e of deepAll(document,selector)) {"),
+    ("      rect:{x:r.x,y:r.y,w:r.width,h:r.height}};",
+     "      rect:{x:r.x,y:r.y,w:r.width,h:r.height},...(e.getRootNode()!==document?{shadow:true}:{})};"),
+    ("""  const words=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+  const range=document.createRange(); let node,length=0;
+  while ((node=walker.nextNode()) && length<6000) {
+    const value=node.textContent.trim(), parent=node.parentElement;
+    if (!value || !parent || parent.closest('script,style,noscript,template') || !visible(parent)) continue;
+    range.selectNodeContents(node); const r=range.getBoundingClientRect();
+    if (r.width>0 && r.height>0 && r.bottom>0 && r.top<innerHeight && r.right>0 && r.left<innerWidth) {
+      words.push(value); length+=value.length;
+    }
+  }
+""", """  const words=[], range=document.createRange(); let length=0;
+  deepText(document.body, node => {
+    if (length>=6000) return false;
+    const value=node.textContent.trim(), parent=node.parentElement;
+    if (!value || !parent || parent.closest('script,style,noscript,template') || !visible(parent)) return;
+    range.selectNodeContents(node); const r=range.getBoundingClientRect();
+    if (r.width>0 && r.height>0 && r.bottom>0 && r.top<innerHeight && r.right>0 && r.left<innerWidth) {
+      words.push(value); length+=value.length;
+    }
+  });
+"""),
+)
+
+
+def shadow_snapshot_js(src: str) -> str | None:
+    """Upstream's snapshot with shadow-root traversal, or None when an anchor is not found exactly
+    once (upstream changed: keep theirs rather than ship a broken script)."""
+    out = src
+    for old, new in _SHADOW_ANCHORS:
+        if out.count(old) != 1:
+            return None
+        out = out.replace(old, new)
+    return out
+
+
+def _install_shadow_snapshot() -> bool:
+    from jev_ultrafast import browser as ub
+    if getattr(ub, "_jev_runner_shadow", None) is not None:
+        return ub._jev_runner_shadow
+    patched = shadow_snapshot_js(ub.READ_STATE)
+    if patched is None:
+        _log.warning("shadow DOM: upstream snapshot.js changed; keeping the original (no shadow support)")
+        ub._jev_runner_shadow = False
+        return False
+    ub.READ_STATE = patched
+    ub.MARKER = f"(() => {{ const state={patched}; return state?.marker ?? null; }})()"
+    ub._jev_runner_shadow = True
+    return True
+
+
+# Like upstream's pre-input resolution, with a composed hit test that descends through open shadow
+# roots (document.elementFromPoint stops at the host). Runs before any input: null = StalePage.
+_RESOLVE_SHADOW_FN = """((action) => {
+  const e = window.__jevFast && window.__jevFast.nodes.get(action.node);
+  if (!e || !e.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) return null;
+  try { if (!e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) return null; } catch (_) {}
+  if (action.kind === 'fill' && (e.readOnly || e.getAttribute('aria-readonly') === 'true')) return null;
+  const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+  if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
+  let hit = document.elementFromPoint(x, y);
+  while (hit && hit.shadowRoot) { const d = hit.shadowRoot.elementFromPoint(x, y); if (!d || d === hit) break; hit = d; }
+  if (!hit || !(e === hit || e.contains(hit))) return null;
+  if (action.kind === 'select') {
+    if (e.tagName !== 'SELECT' || ![...e.options].some(o => o.value === action.value && !o.disabled)) return null;
+    e.value = action.value;
+    e.dispatchEvent(new Event('input', {bubbles: true})); e.dispatchEvent(new Event('change', {bubbles: true}));
+    return {x, y, selected: true};
+  }
+  return {x, y};
+})"""
+
+
 _NODE_FRESH = ("(() => { const c=window.__jevFast; "
                "return c ? [c.pageKey(), c.guard(c.nodes.get(%d))] : null; })()")
 
@@ -505,8 +600,8 @@ def fresh_check(evaluate, page: dict, action: dict | None) -> bool:
     field's value), which is what upstream checks for a click. Waiting and scrolling send no
     input to any element, so they are never stale. No action: the whole-page marker, as before."""
     if action is None:
-        from jev_ultrafast.browser import MARKER  # lazy: nothing touches the harness at import
-        return evaluate(MARKER) == page.get("marker")
+        from jev_ultrafast import browser as ub  # lazy: nothing touches the harness at import
+        return evaluate(ub.MARKER) == page.get("marker")  # ub.MARKER: patched for shadow DOM
     if action.get("kind") in ("wait", "scroll"):
         return True
     node = action.get("node")
@@ -521,6 +616,7 @@ def _default_factory(url: str, background: bool):
     from jev_ultrafast.browser import Browser
     from browser_harness.admin import ensure_daemon
     from browser_harness.helpers import cdp
+    _install_shadow_snapshot()
 
     class _Browser(Browser):
         def __init__(self, url, background):
@@ -1014,6 +1110,9 @@ class ChromeTarget:
             raise
         if not is_fresh:
             raise StalePage("Page changed since this decision. Observe again.")
+        if action.get("shadow"):
+            self._act_shadow(action, text)  # inside a shadow root: upstream's hit test can't see it
+            return
         try:
             self.browser.act(action, page, text=text)
         except Exception as exc:
@@ -1022,6 +1121,25 @@ class ChromeTarget:
             if _is_upstream_stale(exc):
                 raise StalePage(str(exc)) from exc
             # Anything else: input may already have been dispatched; never surface as StalePage.
+            raise RuntimeError(f"action_uncertain: {exc}") from exc
+
+    def _act_shadow(self, action: dict, text: str | None) -> None:
+        """Click/fill/select a control inside a shadow root: resolve with a composed hit test (no
+        input yet: a moved/covered target is a retryable StalePage), then dispatch as for iframes."""
+        args = {k: action.get(k) for k in ("node", "kind", "value")}
+        try:
+            res = self.browser.evaluate(f"{_RESOLVE_SHADOW_FN}({json.dumps(args)})")
+        except Exception as exc:
+            if _is_upstream_stale(exc):
+                raise StalePage(str(exc)) from exc
+            raise
+        if not isinstance(res, dict):
+            raise StalePage("Target changed or is covered. Observe again.")
+        if res.get("selected"):
+            return
+        try:
+            self._dispatch(action, res["x"], res["y"], text)
+        except Exception as exc:  # input may already be in flight: never a retryable StalePage
             raise RuntimeError(f"action_uncertain: {exc}") from exc
 
     def _upload(self, action: dict) -> None:

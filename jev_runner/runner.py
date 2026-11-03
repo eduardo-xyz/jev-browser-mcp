@@ -77,6 +77,21 @@ def locator_of(action: dict) -> dict:
     return {"control": action["id"]}
 
 
+def coarse_fingerprint(page: dict) -> str:
+    """The screen by URL and its controls only, ignoring text. A page with live timestamps or a
+    polling widget gets a new exact fingerprint on every read, which blinded the loop guards: the
+    same click on the same screen looked like progress each time (seen: a contact page where the
+    same tab was clicked five times in a row to max_steps)."""
+    controls = sorted(f"{a.get('kind')}|{a.get('role') or ''}|{a.get('label') or ''}"
+                      for a in page.get("actions") or [] if a.get("kind") not in ("wait", "scroll"))
+    return hashlib.sha256(((page.get("url") or "") + "\n" + "\n".join(controls)).encode()).hexdigest()
+
+
+def _same_screen(h: dict, fingerprint: str, coarse: str) -> bool:
+    """A history entry taken on this screen: the exact fingerprint, or the same URL and controls."""
+    return h.get("fingerprint") == fingerprint or (bool(h.get("coarse")) and h.get("coarse") == coarse)
+
+
 def history_entry(action: dict, page: dict, text: str | None, secret_patterns: list[str] | None = None) -> dict:
     """Replay-ready record of one executed action (the runner fills value_source)."""
     locator = locator_of(action)
@@ -149,6 +164,7 @@ class Runner:
         self._started = time.perf_counter()
         self._stale = 0
         self._signin_reloaded = False  # one reload of the start URL per run on a sign-in bounce
+        self.last_stale: dict | None = None  # why the last action was refused as stale (result detail)
         self._obs_log: list[tuple[str, str]] = []  # recent (where, text): a field can scroll off
 
     def run(self) -> dict:
@@ -193,8 +209,10 @@ class Runner:
             self.status, self.reason = "blocked", e.reason
         except DeviceDisconnected:
             self.status, self.reason = "error", "device_disconnected"
-        except StalePage:
+        except StalePage as e:
             self.status, self.reason = "error", "stale_page"
+            if self._stale < 3:  # raised by observe itself, not by three refused actions
+                self.last_stale = {"action": "observe", "why": (str(e) or "page changed")[:160]}
         except Exception as e:  # provider/target failures end the run, never escape
             msg = scrub({"text": str(e) or type(e).__name__}, self.secrets)["text"]
             self.status, self.reason = "error", msg[:200]
@@ -404,11 +422,22 @@ class Runner:
                 self._replay(*replay, page)
             else:
                 self._act_and_record(decision, page)
-        except StalePage:
+        except StalePage as e:
             self._stale += 1
             self.page = {}
+            label = "replay" if replay else self._choice_label(decision, page)
+            self.last_stale = {"action": label, "why": (str(e) or "page changed")[:160],
+                               "strike": self._stale}
+            _log.info("session=%s stale %d/3 before acting on %r: %s", self.session_id,
+                      self._stale, label, self.last_stale["why"])
             if self._stale >= 3:
                 raise
+
+    @staticmethod
+    def _choice_label(decision, page: dict) -> str:
+        choice = (decision or {}).get("choice") if isinstance(decision, dict) else None
+        a = next((a for a in page.get("actions") or [] if a.get("id") == choice), None)
+        return f"{a.get('kind')} · {a.get('label')}" if a else str(choice)
 
     def _reload_once_on_signin(self, page: dict) -> bool:
         """A signed-in web app can still bounce one fresh load of a deep link to its login page
@@ -674,11 +703,12 @@ class Runner:
         fp = page.get("fingerprint")
         if fp is None:
             return set()
+        coarse = coarse_fingerprint(page)
         counts: dict = {}
         for h in self.history:
             # only true oscillation (the action changed the screen, yet we're back on it); a frozen
             # screen is page_changed False and belongs to _no_progress, not here.
-            if (h.get("fingerprint") != fp or h.get("kind") in ("wait", "scroll")
+            if (not _same_screen(h, fp, coarse) or h.get("kind") in ("wait", "scroll")
                     or h.get("page_changed") is not True):
                 continue
             key = tuple(sorted((h.get("locator") or {}).items()))
@@ -692,9 +722,10 @@ class Runner:
         fp = page.get("fingerprint")
         if fp is None or action.get("kind") in ("scroll", "wait"):
             return False
+        coarse = coarse_fingerprint(page)
         key = tuple(sorted(locator_of(action).items()))
         seen = sum(1 for h in self.history
-                   if h.get("fingerprint") == fp and h.get("page_changed") is True
+                   if _same_screen(h, fp, coarse) and h.get("page_changed") is True
                    and tuple(sorted((h.get("locator") or {}).items())) == key)
         return seen >= LOOP_LIMIT
 
@@ -817,3 +848,4 @@ class Runner:
                 entry["pressed"] = True
                 after = self.page = self._read()
         entry["page_changed"] = after.get("fingerprint") != page.get("fingerprint")
+        entry["coarse"] = coarse_fingerprint(page)  # loop guards: same screen even when text churns

@@ -876,3 +876,66 @@ def test_node_actions_compare_page_key_and_the_node_guard_only():
 def test_no_action_compares_the_whole_page_marker():
     assert fresh_check(lambda expr: ["m"], _page(), None) is True
     assert fresh_check(lambda expr: ["other"], _page(), None) is False
+
+
+# --- shadow DOM --------------------------------------------------------------------------------
+
+from jev_runner.targets.chrome import shadow_snapshot_js, _install_shadow_snapshot  # noqa: E402
+
+
+def test_shadow_snapshot_patches_upstream_or_keeps_it():
+    from jev_ultrafast import browser as ub
+    src = ub.READ_STATE if not getattr(ub, "_jev_runner_shadow", False) else None
+    if src is not None:
+        patched = shadow_snapshot_js(src)
+        assert patched and "deepAll(document,selector)" in patched and "deepText(document.body" in patched
+        assert "shadow:true" in patched and "document.querySelectorAll(selector)" not in patched
+    assert shadow_snapshot_js("(() => { return 1; })()") is None  # unknown upstream: untouched
+
+
+def test_install_shadow_snapshot_once_and_marker_follows(monkeypatch):
+    from jev_ultrafast import browser as ub
+    monkeypatch.setattr(ub, "READ_STATE", ub.READ_STATE if not getattr(ub, "_jev_runner_shadow", False)
+                        else shadow_snapshot_js.__globals__["_SHADOW_ANCHORS"] and ub.READ_STATE)
+    monkeypatch.setattr(ub, "_jev_runner_shadow", None, raising=False)
+    monkeypatch.setattr(ub, "MARKER", "old")
+    ok = _install_shadow_snapshot()
+    assert ok is True and ub.MARKER != "old" and "deepText" in ub.MARKER
+    assert _install_shadow_snapshot() is True  # idempotent
+
+
+def _shadow_target():
+    f = FakeBrowserFactory(["complete"])
+    t = ChromeTarget("https://x.test/a", browser_factory=f)
+    return t, t.browser
+
+
+def test_shadow_action_is_resolved_with_the_composed_hit_test_and_dispatched():
+    t, b = _shadow_target()
+    seen = []
+    b.evaluate = lambda expr: seen.append(expr) or {"x": 10.0, "y": 20.0}
+    page = {"marker": 1, "page_key": ["k"], "guards": {"5": ["g"]}}
+    t.act({"id": "e1", "kind": "click", "node": 5, "shadow": True, "label": "Today"}, page)
+    assert b.acts == []  # upstream act (document.elementFromPoint) is bypassed
+    assert "shadowRoot.elementFromPoint" in seen[-1] and '"node": 5' in seen[-1]
+    presses = [(m, p["x"], p["y"]) for m, p in b.calls if m == "Input.dispatchMouseEvent"]
+    assert presses == [("Input.dispatchMouseEvent", 10.0, 20.0)] * 2
+
+
+def test_shadow_fill_types_and_select_sets_value_in_page():
+    t, b = _shadow_target()
+    b.evaluate = lambda expr: {"x": 1.0, "y": 2.0}
+    t.act({"id": "e1", "kind": "fill", "node": 5, "shadow": True, "label": "Search"}, {}, text="abc")
+    assert ("Input.insertText", {"text": "abc"}) in b.calls
+    b.calls.clear()
+    b.evaluate = lambda expr: {"x": 1.0, "y": 2.0, "selected": True}
+    t.act({"id": "e2", "kind": "select", "node": 6, "shadow": True, "value": "v"}, {})
+    assert not any(m.startswith("Input.") for m, _ in b.calls)  # select is applied in the page
+
+
+def test_shadow_action_refused_before_input_is_a_stale_page():
+    t, b = _shadow_target()
+    b.evaluate = lambda expr: None  # moved, covered or gone
+    with pytest.raises(StalePage):
+        t.act({"id": "e1", "kind": "click", "node": 5, "shadow": True}, {})
+    assert not any(m.startswith("Input.") for m, _ in b.calls)
