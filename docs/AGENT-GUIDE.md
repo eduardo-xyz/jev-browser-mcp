@@ -66,7 +66,7 @@ idle sweep (10 min) won't close an in-use tab. With no token/`BU_NAME` it is a s
 
 | Tool | Use |
 |---|---|
-| `run_task(target, goal, url_or_app, params, money_params, max_steps, session_id, learn, save_as)` | One goal. `target` is `"android"` or `"chrome"`. `url_or_app`: Android package (preferred, e.g. `net.bac.sbe.android`, `com.whatsapp`) or URL. Pass `session_id` to continue in the same session. |
+| `run_task(target, goal, url_or_app, params, money_params, max_steps, session_id, learn, save_as)` | One goal. `target` is `"android"` or `"chrome"`. `url_or_app`: Android package (preferred, e.g. `net.bac.sbe.android`, `com.whatsapp`) or URL. Pass `session_id` to continue in the same session. On chrome, a run for a URL that an idle jev-runner tab already shows **reuses that tab** (the same `session_id` comes back): no new tab and no page load. Call `end_session` first if you need a fresh tab. |
 | `resume(session_id, input, instruction, confirm)` | Continue a paused session. |
 | `screenshot(session_id)` | Saves a PNG of the screen, returns its path. Use it to check before approving anything. |
 | `read(session_id)` | Read-only. Returns the page's visible `text` and per-iframe `frames`, **including cross-origin iframes** the normal snapshot can't see (e.g. a white-labelled GHL automation screen). Use it to list/read content when a `run_task` only "waits" because the real UI is in an iframe. It **self-settles** (re-reads until the text stops growing, up to ~12 s), so no manual sleep is needed. Only visible rows of a virtualised table are captured. Never clicks or changes anything. |
@@ -99,6 +99,8 @@ Hidden files and key/secret-looking names (`.env`, `id_rsa`, `*.pem`, `*token*`,
 Uploading is not sending: the page's Send/Save button afterwards still goes through every guard.
 
 ## Results and what to do
+
+Every result carries `timing` (ms per phase: `setup_ms` connect/launch or tab open, `observe_ms` screen reads, `decide_ms` TypeSafe choices, `text_ms` field values, `act_ms` taps/typing, `verify_ms` the final check). If a run felt slow, look there before changing the goal.
 
 | `status` | Meaning | Do |
 |---|---|---|

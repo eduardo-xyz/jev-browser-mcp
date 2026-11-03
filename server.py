@@ -59,6 +59,10 @@ def run_task(
     "default", or the configured android_serial (one phone; all android sessions share its
     lock); anything else fails with `unknown_device`.
 
+    Sessions: on chrome, a run for a URL an idle jev-runner tab already shows reuses that tab (same
+    `session_id`, no page load); call end_session first for a fresh tab. Results carry `timing`
+    (ms per phase: setup, observe, decide, text, act, verify) to show where a slow run spent time.
+
     Files: on chrome, pass `files` (absolute paths, or bare names in the data dir's outbox/) to
     upload them: the page's file inputs then appear as "Upload file ..." actions and the OS file
     picker never opens. Allowed folders: outbox/, ~/Downloads, ~/Desktop, ~/Documents (config

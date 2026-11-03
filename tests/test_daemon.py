@@ -823,3 +823,36 @@ def test_setup_time_is_reported_once_per_session(daemon_with_fakes, keys):
     assert "setup_ms" in first["timing"]  # connecting + launching the app, paid by the first run
     again = run(d, target="android", goal="b", session_id=first["session_id"])["result"]
     assert "setup_ms" not in again["timing"] and "observe_ms" in again["timing"]
+
+
+TAB_URL = "https://x.test/workflows"
+
+
+def test_idle_chrome_tab_is_reused_for_the_same_url(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    d.script.choices = [["DONE"], ["DONE"], ["DONE"]]
+    a = run(d, target="chrome", goal="a", url_or_app=TAB_URL)["result"]
+    b = run(d, target="chrome", goal="b", url_or_app=TAB_URL)["result"]
+    assert b["session_id"] == a["session_id"] and d.targets_created == 1
+    c = run(d, target="chrome", goal="c", url_or_app=TAB_URL + "?folder=1")["result"]
+    assert c["session_id"] != a["session_id"] and d.targets_created == 2
+
+
+def test_chrome_tab_that_is_gone_is_closed_and_replaced(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    d.script.choices = [["DONE"], ["DONE"]]
+    a = run(d, target="chrome", goal="a", url_or_app=TAB_URL)["result"]
+    d.script.targets[0].ensure_at = lambda url: False  # the person closed the tab
+    b = run(d, target="chrome", goal="b", url_or_app=TAB_URL)["result"]
+    assert b["session_id"] != a["session_id"] and d.script.targets[0].closed
+    ids = [s["session_id"] for s in d.handle({"op": "status", "args": {}})["result"]["sessions"]]
+    assert ids == [b["session_id"]]
+
+
+def test_busy_chrome_tab_is_not_reused(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    d.script.choices = [["n1"], ["DONE"]]  # the first run pauses on the OTP field: not settled
+    a = run(d, target="chrome", goal="otp", url_or_app=TAB_URL)["result"]
+    assert a["status"] == "paused_needs_input"
+    b = run(d, target="chrome", goal="b", url_or_app=TAB_URL)["result"]
+    assert b["session_id"] != a["session_id"] and d.targets_created == 2

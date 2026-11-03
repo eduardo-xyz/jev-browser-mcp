@@ -45,6 +45,7 @@ MAX_WAITS = 3  # a churny SPA never looks "settled"; after this many waits, forc
 WAIT_SETTLE = 12.0  # max seconds a chosen "wait" may spend letting a page finish loading late
 #                     content (a SPA that mounts a cross-origin iframe seconds after its shell
 #                     renders); upstream's wait sleeps only 0.1s, far too short for that.
+WAIT_STATIC = 4.0   # a screen unchanged for this long after a 'wait' isn't loading anything: stop
 WAIT_POLL = 0.5     # poll interval while settling
 WAIT_STABLE = 2     # consecutive unchanged polls that count as "the new content has settled"
 LOOP_DROP = 2   # after the same action is taken this many times on one screen, drop it from the
@@ -376,7 +377,8 @@ class Runner:
         first change was too eager: a churny shell changes every frame while the real content has
         not arrived yet, so we wait for stability; a static screen waits the full window so a late
         mount still has time, rather than the run giving up after MAX_WAITS consecutive waits."""
-        deadline = time.monotonic() + WAIT_SETTLE
+        start = time.monotonic()
+        deadline = start + WAIT_SETTLE
         origin = page.get("fingerprint")
         prev, stable = origin, 0
         while time.monotonic() < deadline:
@@ -389,6 +391,8 @@ class Runner:
                 stable += 1
                 if stable >= WAIT_STABLE and fp != origin:
                     return  # new content appeared and has settled
+                if fp == origin and time.monotonic() - start >= WAIT_STATIC:
+                    return  # nothing has changed at all: don't spend the whole window on it
             else:
                 prev, stable = fp, 0
 

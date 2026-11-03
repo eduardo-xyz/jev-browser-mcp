@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .. import tab_groups
 from .base import StalePage, TargetBlocked
@@ -469,6 +470,18 @@ def loaded(b) -> bool:
         return False
 
 
+def _same_page(a: str, b: str) -> bool:
+    """Same document: scheme, host, path (ignoring a trailing slash) and query; fragments differ
+    freely (a SPA router may add one)."""
+    def key(u):
+        try:
+            p = urlsplit(u or "")
+        except ValueError:
+            return None
+        return (p.scheme.lower(), p.netloc.lower(), (p.path or "/").rstrip("/") or "/", p.query)
+    return key(a) is not None and key(a) == key(b)
+
+
 def _wait_loaded(b, timeout: float = LOAD_TIMEOUT) -> bool:
     deadline = _monotonic() + timeout
     while True:
@@ -495,6 +508,11 @@ def _default_factory(url: str, background: bool):
             self.call("Emulation.setFocusEmulationEnabled", enabled=True)
             self.call("Page.navigate", url=url)
 
+        def alive(self) -> bool:
+            """Whether the tab still exists (ms): a CDP call on a closed tab only times out (5 s)."""
+            ids = {t.get("targetId") for t in cdp("Target.getTargets").get("targetInfos", [])}
+            return self.target in ids
+
     return _Browser(url, background)
 
 
@@ -514,6 +532,25 @@ class ChromeTarget:
         self._last_tab_ping = _monotonic()
         if self._tab:
             tab_groups.claim(self._tab)
+
+    def ensure_at(self, url: str) -> bool:
+        """Make this tab show `url` for a new run: True when it already does, or after navigating
+        there; False when the tab is gone. Reusing an idle tab skips opening one and, when it is
+        still on the page, the page load (the biggest fixed cost of a run)."""
+        alive = getattr(self.browser, "alive", None)
+        try:
+            if alive is not None and not alive():
+                return False
+            here = self.browser.evaluate("location.href")
+        except Exception:
+            return False
+        if _same_page(here, url):
+            return True
+        try:
+            self.browser.call("Page.navigate", url=url)
+            return _wait_loaded(self.browser)
+        except Exception:
+            return False
 
     def set_files(self, paths: list[str]) -> None:
         """Files this run may upload. With files, the OS file picker is intercepted (never opens)

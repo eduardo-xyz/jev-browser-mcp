@@ -808,3 +808,32 @@ def test_upload_gone_input_is_retryable_stale():
     f.browsers[0].call = lambda method, **p: {"result": {"type": "object", "subtype": "null"}}
     with pytest.raises(StalePage):
         t.act({"id": "up1", "node": 5000000, "kind": "click", "file_input": True}, {})
+
+
+# --- reusing an idle tab for a new run on the same URL ---
+
+def test_same_page_ignores_trailing_slash_case_and_fragment():
+    assert chrome_mod._same_page("https://X.test/a/", "https://x.test/a")
+    assert chrome_mod._same_page("https://x.test/a?f=1#x", "https://x.test/a?f=1")
+    assert not chrome_mod._same_page("https://x.test/a?f=1", "https://x.test/a?f=2")
+    assert not chrome_mod._same_page("https://x.test/a", "https://x.test/b")
+    assert not chrome_mod._same_page("", "https://x.test/b")
+
+
+def test_ensure_at_keeps_the_page_or_navigates():
+    t, b = make()
+    b.evaluate = lambda expr: "https://x.test/a?b=1#frag" if expr == "location.href" else True
+    assert t.ensure_at("https://x.test/a/?b=1") is True
+    assert not any(m == "Page.navigate" for m, _ in b.calls)  # still on the page: no reload
+    b.evaluate = lambda expr: "https://x.test/elsewhere" if expr == "location.href" else True
+    assert t.ensure_at("https://x.test/a?b=1") is True
+    assert ("Page.navigate", {"url": "https://x.test/a?b=1"}) in b.calls
+
+
+def test_ensure_at_false_when_the_tab_is_gone():
+    t, b = make()
+
+    def gone(expr):
+        raise RuntimeError("No target with given id found")
+    b.evaluate = gone
+    assert t.ensure_at("https://x.test") is False

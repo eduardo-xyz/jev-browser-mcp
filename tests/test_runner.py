@@ -396,3 +396,17 @@ def test_refresh_target_is_read_once_per_step(cfg):
     r = Runner("s1", t, "go", None, cfg, choose=scripted_choose(["n1", "n2", "DONE"]))
     assert r.run()["status"] == "done"
     assert t.reads == 5  # 2 steps x (read before deciding + read after acting) + the DONE tick
+
+
+def test_wait_on_a_static_screen_stops_early(cfg, monkeypatch):
+    # A 'wait' on a screen that never changes used to spend the whole WAIT_SETTLE window.
+    monkeypatch.setattr(runner_mod, "WAIT_SETTLE", 5.0)
+    monkeypatch.setattr(runner_mod, "WAIT_STATIC", 0.1)
+    monkeypatch.setattr(runner_mod, "WAIT_POLL", 0.01)
+    still = page(click("n1", "Go"))
+    still["actions"].append({"id": "w", "kind": "wait", "label": "Wait for the page to update"})
+    t = FakeTarget([still, still, still])
+    r = Runner("s1", t, "go", None, cfg, choose=scripted_choose(["w", "DONE"]))
+    t0 = time.monotonic()
+    assert r.run()["status"] == "done"
+    assert time.monotonic() - t0 < 1.0

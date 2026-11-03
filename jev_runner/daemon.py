@@ -290,6 +290,10 @@ class Daemon:
         An android device held by a settled, idle session is reused (warm target),
         unless a different app was asked for — then that session is replaced."""
         key = ANDROID_KEY if target == "android" else None
+        if target == "chrome":
+            holder = self._reusable_tab(url_or_app)
+            if holder is not None:
+                return holder, False
         while key is not None:
             with self._lock:
                 holder_id = self.devices.get(key)
@@ -315,6 +319,34 @@ class Daemon:
         session = self._open(target, url_or_app, device)
         session.lock.acquire()  # fresh and unpublished to callers: never blocks
         return session, True
+
+    def _reusable_tab(self, url: str | None) -> Session | None:
+        """An idle chrome session opened for this exact URL, locked, with its tab back on the page:
+        the run then skips opening a tab and (when the tab never left) the page load. Most runs
+        repeat a URL used minutes earlier. A busy session is simply not reused (a new tab opens),
+        and a session whose tab is gone is closed here."""
+        if not url:
+            return None
+        with self._lock:
+            candidates = [s for s in self.sessions.values()
+                          if s.kind == "chrome" and not s.closed and s.start == url]
+        for s in candidates:
+            if not s.lock.acquire(blocking=False):
+                continue
+            ok = False
+            try:
+                if not s.closed and s.settled():
+                    ensure = getattr(s.target, "ensure_at", None)
+                    ok = True if ensure is None else bool(ensure(url))
+                    if not ok:
+                        log.info("op=run_task session=%s tab gone; closing", s.session_id)
+                        self._close_session(s)
+            except Exception:
+                ok = False
+            if ok:
+                return s  # still locked: the caller releases it
+            s.lock.release()
+        return None
 
     def _open(self, target: str, url_or_app: str | None, device: str | None) -> Session:
         sid = uuid4().hex[:8]
