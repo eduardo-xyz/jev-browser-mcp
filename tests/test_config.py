@@ -82,3 +82,34 @@ def test_chrome_binding_loads_from_toml(tmp_path, monkeypatch):
     (tmp_path / "config.toml").write_text('chrome_cdp_url = "http://127.0.0.1:9333"\nchrome_label = "da"\n')
     cfg = config.load()
     assert (cfg.chrome_cdp_url, cfg.chrome_label) == ("http://127.0.0.1:9333", "da")
+
+
+def test_binding_repoints_an_already_imported_harness(monkeypatch, caplog):
+    import sys
+    from types import SimpleNamespace
+    ipc = SimpleNamespace(sock_addr=lambda name: f"/tmp/bu-{name}.sock")
+    helpers = SimpleNamespace(NAME="default", SOCK="/tmp/bu-default.sock", ipc=ipc)
+    admin = SimpleNamespace(NAME="default")
+    monkeypatch.setitem(sys.modules, "browser_harness.helpers", helpers)
+    monkeypatch.setitem(sys.modules, "browser_harness.admin", admin)
+    monkeypatch.delenv("BU_NAME", raising=False)
+    with caplog.at_level("WARNING", logger="jevd"):
+        config.apply_chrome_binding(config.Config(chrome_label="da"))
+    assert helpers.NAME == "da" and helpers.SOCK == "/tmp/bu-da.sock" and admin.NAME == "da"
+    assert config.harness_label() == "da" and "re-pointing" in caplog.text
+
+
+def test_daemon_module_binds_the_harness_before_importing_it(tmp_path):
+    """Regression: importing jev_runner.daemon used to import browser_harness (via the runner)
+    with BU_NAME unset, freezing the harness name to 'default' = a harness on whatever Chrome it
+    finds, whatever config.toml said. Checked in a fresh interpreter, as the daemon starts."""
+    import subprocess, sys
+    (tmp_path / "config.toml").write_text('chrome_cdp_url = "http://127.0.0.1:9555"\nchrome_label = "zz"\n')
+    env = {k: v for k, v in os.environ.items() if k not in ("BU_NAME", "BU_CDP_URL")}
+    env["JEV_DATA_DIR"] = str(tmp_path)
+    code = ("import jev_runner.daemon, browser_harness.helpers as h, browser_harness.admin as a, os; "
+            "print(h.NAME, a.NAME, os.environ.get('BU_CDP_URL'))")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env,
+                         cwd=str(config.REPO_ROOT), timeout=60)
+    assert out.returncode == 0, out.stderr[-500:]
+    assert out.stdout.split() == ["zz", "zz", "http://127.0.0.1:9555"]

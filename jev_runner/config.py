@@ -153,7 +153,12 @@ def load_dotenv(environ=None, path: Path | None = None) -> list[str]:
 def apply_chrome_binding(cfg: "Config", environ=None) -> dict:
     """Export the Chrome binding from config.toml for browser_harness. The data dir's config is
     authoritative: an environment value that differs is overridden (and logged), so the Chrome a
-    jevd drives depends only on its data dir, never on who started it. Returns the binding."""
+    jevd drives depends only on its data dir, never on who started it. Returns the binding.
+
+    browser_harness freezes BU_NAME into module globals when it is first imported (its daemon
+    socket name: "default" without the variable, which is a harness attached to whatever Chrome
+    it finds). So this must run before anything imports jev_ultrafast/browser_harness; when the
+    harness is already loaded, its globals are re-pointed too."""
     environ = os.environ if environ is None else environ
     for attr, var in CHROME_ENV:
         value = getattr(cfg, attr)
@@ -164,7 +169,41 @@ def apply_chrome_binding(cfg: "Config", environ=None) -> dict:
             log.warning("%s=%s from the environment ignored: config.toml says %s = %r",
                         var, current, attr, value)
         environ[var] = value
+    if environ is os.environ and cfg.chrome_label:
+        _repoint_loaded_harness(cfg.chrome_label)
     return chrome_binding(environ)
+
+
+def _repoint_loaded_harness(label: str) -> None:
+    """browser_harness.helpers/admin keep NAME (and the socket it names) as import-time globals."""
+    import sys
+    for mod in ("browser_harness.helpers", "browser_harness.admin"):
+        m = sys.modules.get(mod)
+        if m is None or getattr(m, "NAME", label) == label:
+            continue
+        log.warning("%s was imported as harness %r before the binding; re-pointing to %r",
+                    mod, m.NAME, label)
+        m.NAME = label
+        ipc = getattr(m, "ipc", None)
+        if hasattr(m, "SOCK") and ipc is not None and hasattr(ipc, "sock_addr"):
+            m.SOCK = ipc.sock_addr(label)
+
+
+def harness_label() -> str | None:
+    """The harness name the loaded browser_harness actually uses (None: not imported yet)."""
+    import sys
+    m = sys.modules.get("browser_harness.helpers")
+    return getattr(m, "NAME", None) if m is not None else None
+
+
+def bind_chrome_at_start() -> dict | None:
+    """Called first thing by the daemon module, before it imports the runner (which imports
+    jev_ultrafast and with it browser_harness). Returns the binding, or None when the data dir
+    has no usable config (serve() reports that properly)."""
+    try:
+        return apply_chrome_binding(load())
+    except Exception:
+        return None
 
 
 def chrome_binding(environ=None) -> dict:

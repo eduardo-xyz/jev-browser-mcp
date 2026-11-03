@@ -36,6 +36,10 @@ TOOL_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / "Library/A
 def daemon_env(env=None) -> dict:
     env = dict(os.environ if env is None else env)
     config.load_dotenv(env)  # API keys the launcher didn't pass; existing values win
+    try:
+        config.apply_chrome_binding(config.load(), env)  # the data dir's Chrome, whoever spawns
+    except Exception:
+        pass  # a bad config.toml is reported by the daemon itself
     parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
     env["PATH"] = os.pathsep.join(parts + [d for d in TOOL_DIRS if d not in parts])
     return env

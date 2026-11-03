@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import socket
 import tempfile
@@ -721,19 +722,34 @@ def test_status_reports_chrome_binding_keys_and_data_dir(cfg, script, monkeypatc
     d = Daemon(cfg, target_factory=script.target_factory, runner_factory=script.runner_factory)
     try:
         st = d.handle({"op": "status", "args": {}})["result"]
-        assert st["chrome"] == {"cdp_url": "http://127.0.0.1:9333", "label": "da"}
+        assert (st["chrome"]["cdp_url"], st["chrome"]["label"]) == ("http://127.0.0.1:9333", "da")
+        assert "harness" in st["chrome"]  # the harness name this process really talks to
         assert st["keys"] == {"TYPESAFE_API_KEY": True, "TEXT_MODEL_API_KEY": False}
         assert st["data_dir"] == str(cfg.data_dir)
     finally:
         d.close()
 
 
-def test_daemon_env_fills_keys_from_dotenv(tmp_path, monkeypatch):
+def test_daemon_env_fills_keys_from_dotenv_and_the_chrome_binding(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text("TYPESAFE_API_KEY=from-dotenv\nTEXT_MODEL=deepseek-chat\n")
     monkeypatch.setattr("jev_runner.config.REPO_ROOT", tmp_path)
-    env = client.daemon_env({"PATH": "/usr/bin", "TEXT_MODEL": "mine"})
+    data = Path(os.environ["JEV_DATA_DIR"]); data.mkdir(parents=True, exist_ok=True)
+    (data / "config.toml").write_text('chrome_cdp_url = "http://127.0.0.1:9333"\nchrome_label = "da"\n')
+    env = client.daemon_env({"PATH": "/usr/bin", "TEXT_MODEL": "mine", "BU_NAME": "other"})
     assert env["TYPESAFE_API_KEY"] == "from-dotenv" and env["TEXT_MODEL"] == "mine"
+    assert env["BU_CDP_URL"] == "http://127.0.0.1:9333" and env["BU_NAME"] == "da"
+
+
+def test_status_warns_when_the_loaded_harness_is_not_the_configured_one(cfg, script, monkeypatch):
+    monkeypatch.setenv("BU_NAME", "da")
+    monkeypatch.setattr("jev_runner.config.harness_label", lambda: "default")
+    d = Daemon(cfg, target_factory=script.target_factory, runner_factory=script.runner_factory)
+    try:
+        ch = d.handle({"op": "status", "args": {}})["result"]["chrome"]
+        assert ch["harness"] == "default" and "restart jevd" in ch["warning"]
+    finally:
+        d.close()
 
 
 # -- files -------------------------------------------------------------------

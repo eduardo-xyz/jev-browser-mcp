@@ -17,14 +17,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
-from . import config, files, result
-from .adb_link import AdbLink
-from .config import Config
-from .config import socket_path as config_socket_path
-from .flows import FlowStore, slug
-from .runner import Runner
-from .vault import Keychain
-from .targets.base import DeviceDisconnected, TargetBlocked
+from . import config  # stdlib only
+
+# The Chrome binding must be in the environment BEFORE the runner (-> jev_ultrafast ->
+# browser_harness) is imported: browser_harness freezes BU_NAME at import into the name of the
+# harness daemon it talks to, and the nameless "default" harness attaches to whichever Chrome it
+# finds. This is what made a jevd drive a signed-out everyday Chrome while reporting port 9333.
+config.bind_chrome_at_start()
+
+from . import files, result  # noqa: E402
+from .adb_link import AdbLink  # noqa: E402
+from .config import Config  # noqa: E402
+from .config import socket_path as config_socket_path  # noqa: E402
+from .flows import FlowStore, slug  # noqa: E402
+from .runner import Runner  # noqa: E402
+from .vault import Keychain  # noqa: E402
+from .targets.base import DeviceDisconnected, TargetBlocked  # noqa: E402
 
 REQUIRED_ENV_VARS = ("TYPESAFE_API_KEY", "TEXT_MODEL_API_KEY")
 TARGETS = ("android", "chrome")
@@ -521,7 +529,7 @@ class Daemon:
             "flows": len(self.store.list()),
             "data_dir": str(self.cfg.data_dir),
             # Which Chrome `target: "chrome"` runs drive. None = whatever browser_harness finds.
-            "chrome": config.chrome_binding(),
+            "chrome": self._chrome_status(),
             "keys": {name: bool(os.environ.get(name)) for name in REQUIRED_ENV_VARS},
         }
         if self.memory is not None:
@@ -529,6 +537,16 @@ class Daemon:
                 out["memory"] = self.memory.stats()
             except Exception:
                 pass
+        return out
+
+    @staticmethod
+    def _chrome_status() -> dict:
+        out = config.chrome_binding()
+        harness = config.harness_label()
+        out["harness"] = harness  # the harness daemon this process really talks to
+        if harness is not None and harness != (out["label"] or "default"):
+            out["warning"] = (f"browser_harness is bound to {harness!r}, not {out['label']!r}: "
+                              "Chrome runs may hit another Chrome; restart jevd")
         return out
 
     def op_list_flows(self) -> dict:
