@@ -1110,6 +1110,98 @@ def test_a_canvas_inside_an_iframe_pans_in_the_frame(monkeypatch):
             {"type": "mouseWheel", "x": 698, "y": 442, "deltaX": 800, "deltaY": 0}) in b.calls
 
 
+def _offscreen_target(rects, canvas_center={"x": 300, "y": 420}):
+    """A canvas with one node beyond its pane; `rects` are what successive measurements return."""
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    seq = list(rects)
+    def ev(expr):
+        if "base + 900000" in expr:  # the off-screen discovery script
+            return [{"node": 8000000, "label": "WAIT 4 hours", "canvas": 8900000}]
+        if expr.startswith(chrome_mod._RECT_FN):
+            return seq.pop(0) if seq else None
+        if expr.endswith("(8900000)"):  # the canvas resolved for the wheel
+            return canvas_center
+        return []
+    b.evaluate = ev
+    b.observe = lambda screenshot=False: {"url": "u", "text": "", "actions": []}
+    return t, b
+
+
+def _wheels(b):
+    return [(a["deltaX"], a["deltaY"]) for m, a in b.calls
+            if m == "Input.dispatchMouseEvent" and a.get("type") == "mouseWheel"]
+
+
+def test_a_node_beyond_the_canvas_pane_is_brought_into_view_with_measured_pans(monkeypatch):
+    monkeypatch.setattr(chrome_mod.time, "sleep", lambda s: None)
+    vp = {"w": 200, "h": 60, "vw": 896, "vh": 780}
+    t, b = _offscreen_target([{"x": 348, "y": 1500, **vp}, {"x": 348, "y": 1000, **vp},   # first wheel moved 500 of 2280
+                              {"x": 348, "y": 1000, **vp}, {"x": 348, "y": 300, **vp},     # learned ratio, second wheel
+                              {"x": 348, "y": 300, **vp}])
+    page = t.observe()
+    bring = next(a for a in page["actions"] if a.get("pan_to"))
+    assert (bring["id"], bring["label"], bring["kind"], bring["canvas"]) == \
+        ("bv1", "Bring WAIT 4 hours into view", "scroll", 8900000)
+    t.act(bring, page)
+    assert _wheels(b) == [(0, 2280), (0, 2400)]   # toward the node, then with the learned ratio, clamped
+    assert all(a["x"] == 300 and a["y"] == 420 for m, a in b.calls if m == "Input.dispatchMouseEvent")
+
+
+def test_a_node_already_in_view_needs_no_wheel_and_a_gone_node_is_stale(monkeypatch):
+    monkeypatch.setattr(chrome_mod.time, "sleep", lambda s: None)
+    vp = {"w": 200, "h": 60, "vw": 896, "vh": 780}
+    t, b = _offscreen_target([{"x": 100, "y": 100, **vp}])
+    page = t.observe()
+    t.act(next(a for a in page["actions"] if a.get("pan_to")), page)
+    assert _wheels(b) == []
+    t, b = _offscreen_target([None])
+    page = t.observe()
+    with pytest.raises(StalePage):
+        t.act(next(a for a in page["actions"] if a.get("pan_to")), page)
+    assert _wheels(b) == []
+
+
+def test_a_canvas_that_does_not_pan_gets_one_wheel_only(monkeypatch):
+    monkeypatch.setattr(chrome_mod.time, "sleep", lambda s: None)
+    vp = {"w": 200, "h": 60, "vw": 896, "vh": 780}
+    still = {"x": 348, "y": 1500, **vp}
+    t, b = _offscreen_target([still, still, still, still])
+    page = t.observe()
+    t.act(next(a for a in page["actions"] if a.get("pan_to")), page)
+    assert _wheels(b) == [(0, 2280)]
+
+
+def test_a_node_beyond_an_iframe_canvas_is_panned_to_inside_the_frame(monkeypatch):
+    monkeypatch.setattr(chrome_mod.time, "sleep", lambda s: None)
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: []
+    b.observe = lambda screenshot=False: {"url": "u", "text": "", "actions": [], "fingerprint": "fp0"}
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://editor.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [], "text": "Builder"})
+    vp = {"w": 200, "h": 60, "vw": 896, "vh": 780}
+    rects = [{"x": 348, "y": 1500, **vp}, {"x": 348, "y": 300, **vp}, {"x": 348, "y": 300, **vp}]
+    def frame_eval(sid, expr):
+        if "base + 900000" in expr:
+            return [{"node": 8000000, "label": "WAIT 4 hours", "canvas": 8900000}]
+        if expr.startswith(chrome_mod._RECT_FN):
+            return rects.pop(0)
+        return []
+    monkeypatch.setattr(t, "_frame_eval", frame_eval)
+    page = t.observe()
+    bring = next(a for a in page["actions"] if a.get("frame") and a.get("pan_to"))
+    assert bring["label"] == "Bring WAIT 4 hours into view"
+    assert bring["frame_node"] == 8000000 and bring["canvas"] == 8900000
+    monkeypatch.setattr(t, "_iframe_offset", lambda origin: {"x": 224, "y": 0, "w": 896, "h": 780})
+    monkeypatch.setattr(t, "_resolve_in_frame", lambda sid, node: {"x": 474, "y": 442} if node == 8900000 else None)
+    t.act(bring, page)
+    assert [(a["x"], a["y"], a["deltaX"], a["deltaY"]) for m, a in b.calls
+            if m == "Input.dispatchMouseEvent"] == [(698, 442, 0, 2280)]
+
+
 def test_a_panel_gone_or_covered_is_a_retryable_stale_page():
     t, b = _scroller_target([{"node": 6000000, "down": True, "up": False}])
     page = t.observe()

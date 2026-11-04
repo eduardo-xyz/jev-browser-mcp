@@ -651,6 +651,101 @@ def _scroller_actions(found, prefix: str = "sc") -> list:
     return out
 
 
+# Named controls that sit outside the pane of a pannable canvas (a workflow's nodes beyond the
+# visible graph). Blind pans overshoot (seen: five "Pan down" past a node near the top), so each
+# such control is offered as "Bring <title> into view"; act() pans toward it, measuring as it goes.
+# HTML controls only (an SVG edge is not a destination), first of each title, bounded.
+_OFFSCREEN_JS = """(() => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes || !document.body) return [];
+  const clean = s => String(s || '').replace(/\\s+/g, ' ').trim();
+  const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
+  const CONTROL = 'a[href],button,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="option"]';
+  const area = innerWidth * innerHeight, out = [], seen = new Set(), base = 8000000;
+  let k = 0;
+  for (const cv of document.querySelectorAll('div,section,main')) {
+    if (k >= 2) break;
+    const cs = getComputedStyle(cv);
+    if (!/(hidden|clip)/.test(cs.overflow + ' ' + cs.overflowY) || !vis(cv)) continue;
+    const cr = cv.getBoundingClientRect();
+    if (cr.width * cr.height < area * 0.4) continue;
+    if (![...cv.children].some(x => getComputedStyle(x).transform !== 'none')) continue;
+    const canvas = base + 900000 + k++;
+    c.nodes.set(canvas, cv);
+    for (const e of cv.querySelectorAll(CONTROL)) {
+      if (out.length >= 40) break;
+      if (!(e instanceof HTMLElement) || !vis(e)) continue;
+      const r = e.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const inside = r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
+      if (inside) continue;
+      const label = clean(e.getAttribute('aria-label') || (e.innerText || '').split('\\n')[0]).slice(0, 40);
+      if (!label || seen.has(label)) continue;
+      seen.add(label);
+      const id = base + out.length;
+      c.nodes.set(id, e);
+      out.push({node: id, label, canvas});
+    }
+  }
+  return out;
+})()"""
+
+# Where a node is now, relative to its viewport (null when gone): what the pan loop measures.
+_RECT_FN = """(node => {
+  const e = window.__jevFast && window.__jevFast.nodes.get(node);
+  if (!e || !e.isConnected) return null;
+  const r = e.getBoundingClientRect();
+  return {x: r.x, y: r.y, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight};
+})"""
+
+
+def _offscreen_actions(found, prefix: str = "bv") -> list:
+    """'Bring <title> into view' actions for controls beyond a canvas's pane (see _OFFSCREEN_JS)."""
+    out = []
+    for i, f in enumerate(found if isinstance(found, list) else []):
+        if not isinstance(f, dict) or not isinstance(f.get("node"), int) or not isinstance(f.get("canvas"), int):
+            continue
+        label = f.get("label") if isinstance(f.get("label"), str) else ""
+        if not label.strip():
+            continue
+        out.append({"id": f"{prefix}{i + 1}", "kind": "scroll", "node": f["node"], "canvas": f["canvas"],
+                    "label": f"Bring {label.strip()} into view", "delta": 0, "scroller": True, "pan_to": True})
+    return out
+
+
+def _pan_into_view(rect, wheel, settle=0.25, steps=8) -> bool:
+    """Wheel a canvas until the node is inside its pane. `rect(node)` measures, `wheel(dx, dy)` pans.
+    The wheel-to-pixel ratio is learned from the first move (a canvas pans a fraction of the delta).
+    True when the node ended inside the pane; a node that is gone raises StalePage."""
+    ratio = 2.0
+    for _ in range(steps):
+        r = rect()
+        if not isinstance(r, dict):
+            raise StalePage("Node gone since this decision. Observe again.")
+        cx, cy = r["x"] + r["w"] / 2, r["y"] + r["h"] / 2
+        if r["x"] >= 0 and r["y"] >= 0 and r["x"] + r["w"] <= r["vw"] and r["y"] + r["h"] <= r["vh"]:
+            return True
+        need_x, need_y = cx - r["vw"] / 2, cy - r["vh"] / 2
+        dx = max(-2400, min(2400, round(need_x * ratio)))
+        dy = max(-2400, min(2400, round(need_y * ratio)))
+        if not dx and not dy:
+            return False
+        wheel(dx, dy)
+        time.sleep(settle)
+        after = rect()
+        if not isinstance(after, dict):
+            raise StalePage("Node gone since this decision. Observe again.")
+        moved_y = cy - (after["y"] + after["h"] / 2)
+        moved_x = cx - (after["x"] + after["w"] / 2)
+        if abs(dy) >= 50 and abs(moved_y) >= 2:
+            ratio = max(0.5, min(8.0, abs(dy) / abs(moved_y)))
+        elif abs(dx) >= 50 and abs(moved_x) >= 2:
+            ratio = max(0.5, min(8.0, abs(dx) / abs(moved_x)))
+        elif abs(moved_x) < 2 and abs(moved_y) < 2:
+            return False  # the canvas does not pan under a wheel
+    return False
+
+
 def _icon_control_actions(found, prefix: str) -> list:
     """Actions for discovered icon controls (blank label: _enrich_blank_labels names them)."""
     if not isinstance(found, list):
@@ -1104,6 +1199,7 @@ class ChromeTarget:
             raw += widgets
             try:
                 raw += _scroller_actions(self._frame_eval(session_id, _SCROLLERS_JS))
+                raw += _offscreen_actions(self._frame_eval(session_id, _OFFSCREEN_JS))
             except Exception:
                 pass  # never let discovery break a normal observe
             if self._files:
@@ -1135,6 +1231,8 @@ class ChromeTarget:
                         merged["delta_x"] = a["delta_x"]
                     if a.get("pan"):
                         merged["pan"] = True
+                    if a.get("pan_to") and isinstance(a.get("canvas"), int):
+                        merged["pan_to"], merged["canvas"] = True, a["canvas"]
                     if a.get("scroller") and isinstance(a.get("node"), int):
                         merged["frame_node"], merged["scroller"] = a["node"], True
                     actions.append(merged)
@@ -1260,6 +1358,10 @@ class ChromeTarget:
         except Exception:
             return  # never let discovery break a normal observe
         page.setdefault("actions", []).extend(_scroller_actions(found))
+        try:
+            page["actions"].extend(_offscreen_actions(self.browser.evaluate(_OFFSCREEN_JS)))
+        except Exception:
+            pass  # never let discovery break a normal observe
 
     def _frame_overlay_actions(self, session_id, labels: set) -> list:
         """Overlay/menu options inside an OOPIF (a row menu opened in the iframe renders there)."""
@@ -1497,6 +1599,18 @@ class ChromeTarget:
     def _act_scroller(self, action: dict) -> None:
         """Wheel over a panel that scrolls inside the page, resolved by node like a click: a panel
         that is gone or covered is a retryable StalePage, before any input."""
+        if action.get("pan_to"):
+            try:
+                center = self.browser.evaluate(f"{_RESOLVE_IN_FRAME_FN}({int(action['canvas'])})")
+            except Exception as exc:
+                raise StalePage("Canvas gone since this decision. Observe again.") from exc
+            if not isinstance(center, dict):
+                raise StalePage("Canvas changed or is covered. Observe again.")
+            node = int(action["node"])
+            _pan_into_view(lambda: self.browser.evaluate(f"{_RECT_FN}({node})"),
+                           lambda dx, dy: self.browser.call("Input.dispatchMouseEvent", type="mouseWheel",
+                                                            x=center["x"], y=center["y"], deltaX=dx, deltaY=dy))
+            return
         try:
             center = self.browser.evaluate(f"{_RESOLVE_IN_FRAME_FN}({int(action['node'])})")
         except Exception as exc:
@@ -1624,6 +1738,16 @@ class ChromeTarget:
             if offset is None:
                 raise StalePage("Iframe moved since this decision. Observe again.")
             x, y = offset["x"] + offset["w"] / 2, offset["y"] + offset["h"] / 2  # wheel over the iframe
+            if action.get("pan_to"):
+                center = self._resolve_in_frame(frame["session"], action["canvas"])
+                if center is None:
+                    raise StalePage("Canvas changed or is covered. Observe again.")
+                cx, cy = offset["x"] + center["x"], offset["y"] + center["y"]
+                node = int(action["frame_node"])
+                _pan_into_view(lambda: self._frame_eval(frame["session"], f"{_RECT_FN}({node})"),
+                               lambda dx, dy: self.browser.call("Input.dispatchMouseEvent", type="mouseWheel",
+                                                                x=cx, y=cy, deltaX=dx, deltaY=dy))
+                return
             if action.get("frame_node") is not None:  # a panel inside the iframe: wheel over it
                 center = self._resolve_in_frame(frame["session"], action["frame_node"])
                 if center is None:

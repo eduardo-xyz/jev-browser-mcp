@@ -166,6 +166,26 @@ def cap_for_model(actions: list[dict], goal: str, limit: int = MODEL_TARGET_LIMI
     return [a for a in actions if a["id"] in keep_ids or a.get("kind") not in ("click", "fill", "select")]
 
 
+BRING_LIMIT = 12   # "Bring <title> into view" offers kept per decision, goal-named ones first
+
+
+def trim_bring_into_view(actions: list[dict], goal: str, limit: int = BRING_LIMIT) -> list[dict]:
+    """A canvas can offer dozens of off-screen nodes; keep the ones the goal names, then the
+    first few in screen order, so the model's option list stays short."""
+    bring = [a for a in actions if a.get("pan_to")]
+    if len(bring) <= limit:
+        return actions
+    words = set(_WORD.findall((goal or "").lower()))
+    def title(a):  # the node's own words, without the "Bring … into view" template
+        return _WORD.findall((a.get("label") or "").lower().removeprefix("bring ").removesuffix(" into view"))
+    keep = {a["id"] for a in bring if words & set(title(a))}
+    for a in bring:
+        if len(keep) >= limit:
+            break
+        keep.add(a["id"])
+    return [a for a in actions if not a.get("pan_to") or a["id"] in keep]
+
+
 class _LoggingClient:
     """The model client, with a provider's error body in jevd's log (a bare status code says
     nothing about a rejected request). Never logs a successful response."""
@@ -683,7 +703,8 @@ class Runner:
 
     def _decide(self, view: dict) -> dict:
         self.model_calls += 1
-        capped = cap_for_model(view["actions"], self.goal, text=view.get("text") or "")
+        capped = cap_for_model(trim_bring_into_view(view["actions"], self.goal), self.goal,
+                               text=view.get("text") or "")
         if len(capped) < len(view["actions"]):
             _log.info("session=%s view trimmed for the model: %d of %d controls kept",
                       self.session_id, len(capped), len(view["actions"]))

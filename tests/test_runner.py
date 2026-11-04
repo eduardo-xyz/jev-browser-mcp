@@ -574,6 +574,19 @@ def test_long_labels_are_capped_by_request_size_before_count(cfg):
     assert est <= MODEL_BODY_BUDGET
 
 
+def test_bring_into_view_offers_are_trimmed_to_the_goal_and_a_few_more(cfg):
+    from jev_runner.runner import trim_bring_into_view
+    bring = [{"id": f"bv{i}", "kind": "scroll", "node": 8000000 + i, "pan_to": True,
+              "label": f"Bring Step {i} into view"} for i in range(40)]
+    bring[33]["label"] = "Bring WAIT 4 hours into view"
+    actions = [click("n1", "Save")] + bring + [{"id": "wait", "kind": "wait", "label": "Wait"}]
+    kept = trim_bring_into_view(actions, "bring the node 'WAIT 4 hours' into view, then click it")
+    ids = [a["id"] for a in kept]
+    assert "bv33" in ids and len([a for a in kept if a.get("pan_to")]) == 12
+    assert ids[0] == "n1" and ids[-1] == "wait" and ids[1:4] == ["bv0", "bv1", "bv2"]
+    assert trim_bring_into_view(actions[:10], "x") == actions[:10]   # few offers: untouched
+
+
 def test_view_under_the_limit_is_untouched(cfg):
     from jev_runner.runner import cap_for_model
     actions = [click(f"n{i}", f"Step {i}") for i in range(255)]
