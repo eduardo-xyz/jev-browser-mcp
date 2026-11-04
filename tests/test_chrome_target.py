@@ -1023,3 +1023,104 @@ def test_fill_and_scroll_do_not_look_for_new_tabs(monkeypatch):
     t, b, calls = _tab_target(monkeypatch, [{"targetId": "T2", "type": "page", "openerId": "T1"}])
     t.act({"id": "e1", "kind": "fill", "node": 3, "label": "Search"}, {"marker": 1}, text="a")
     assert not any(m == "Target.getTargets" for m, _ in calls)
+
+
+# --- freshness is about the target and its document, not the page around it ------------------
+
+def test_node_freshness_ignores_scroll_and_other_fields_but_not_the_document():
+    page = {"page_key": ["t0", "https://x/a", 0, 0, 1120, 780, [["q", "", False]]],
+            "guards": {"7": ["lnk", "link", "Open in new tab"]}}
+    guard = ["lnk", "link", "Open in new tab"]
+    # the list scrolled itself and another field changed: the row link is still the same link
+    moved = lambda e: [["t0", "https://x/a", 0, 560, 1120, 780, [["q", "abc", False]]], guard]  # noqa: E731
+    assert fresh_check(moved, page, {"kind": "click", "node": 7}) is True
+    reloaded = lambda e: [["t1", "https://x/a", 0, 0, 1120, 780, [["q", "", False]]], guard]  # noqa: E731
+    assert fresh_check(reloaded, page, {"kind": "click", "node": 7}) is False
+    elsewhere = lambda e: [["t0", "https://x/b", 0, 0, 1120, 780, [["q", "", False]]], guard]  # noqa: E731
+    assert fresh_check(elsewhere, page, {"kind": "click", "node": 7}) is False
+    assert fresh_check(lambda e: "garbage", page, {"kind": "click", "node": 7}) is False
+
+
+# --- panels that scroll inside the page --------------------------------------------------------
+
+def _scroller_target(found):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    def ev(expr):
+        if "scrollHeight > e.clientHeight + 20" in expr:
+            return found
+        if expr.endswith("(6000001)"):  # the resolver applied to that node
+            return {"x": 300, "y": 420}
+        if expr.endswith("(6000000)"):
+            return None  # gone or covered
+        return []
+    b.evaluate = ev
+    b.observe = lambda screenshot=False: {"url": "u", "text": "", "actions": []}
+    return t, b
+
+
+def test_panels_that_scroll_inside_the_page_are_offered_and_wheeled_over():
+    t, b = _scroller_target([{"node": 6000000, "down": True, "up": False},
+                             {"node": 6000001, "down": True, "up": True}])
+    page = t.observe()
+    sc = [(a["id"], a["label"], a["delta"]) for a in page["actions"] if a.get("scroller")]
+    assert sc == [("sc1d", "Scroll the list down", 560), ("sc2d", "Scroll the list 2 down", 560),
+                  ("sc2u", "Scroll the list 2 up", -560)]
+    t.act(next(a for a in page["actions"] if a["id"] == "sc2u"), page)
+    assert b.acts == []  # not upstream's wheel over the window
+    assert ("Input.dispatchMouseEvent",
+            {"type": "mouseWheel", "x": 300, "y": 420, "deltaX": 0, "deltaY": -560}) in b.calls
+
+
+def test_a_panel_gone_or_covered_is_a_retryable_stale_page():
+    t, b = _scroller_target([{"node": 6000000, "down": True, "up": False}])
+    page = t.observe()
+    with pytest.raises(StalePage):
+        t.act(next(a for a in page["actions"] if a["id"] == "sc1d"), page)
+    assert not any(m == "Input.dispatchMouseEvent" for m, _ in b.calls)
+
+
+def test_scroller_discovery_failure_never_breaks_observe():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    def ev(expr):
+        if "scrollHeight > e.clientHeight + 20" in expr:
+            raise RuntimeError("boom")
+        return []
+    f.browsers[0].evaluate = ev
+    assert [a["id"] for a in t.observe()["actions"]] == []
+
+
+# --- an iframe's text reaches Jev, and its panels scroll in place --------------------------------
+
+def test_iframe_text_is_merged_for_the_model_and_its_panels_wheeled_in_the_frame(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: []
+    b.observe = lambda screenshot=False: {"url": "u", "text": "Nav only", "actions": [],
+                                          "fingerprint": "fp0"}
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {
+        "actions": [{"id": "e1", "node": 4, "kind": "click", "label": "View Configuration",
+                     "role": "button"}], "text": "Email Services\nView Configuration"})
+    def frame_eval(sid, expr):
+        if "scrollHeight > e.clientHeight + 20" in expr:
+            return [{"node": 6000000, "down": True, "up": False}]
+        return []
+    monkeypatch.setattr(t, "_frame_eval", frame_eval)
+    page = t.observe()
+    assert page["text"] == "Nav only\nEmail Services\nView Configuration"
+    sc = next(a for a in page["actions"] if a.get("frame") and a.get("scroller"))
+    assert sc["id"] == "f1sc1d" and sc["frame_node"] == 6000000 and sc["kind"] == "scroll"
+    fp_with_text = page["fingerprint"]
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
+        {"id": "e1", "node": 4, "kind": "click", "label": "View Configuration", "role": "button"}],
+        "text": "Email Services\nView Configuration\nnew row"})
+    assert t.observe()["fingerprint"] != fp_with_text  # a change confined to the frame is progress
+    monkeypatch.setattr(t, "_iframe_offset", lambda origin: {"x": 224, "y": 0, "w": 896, "h": 780})
+    monkeypatch.setattr(t, "_resolve_in_frame", lambda sid, node: {"x": 100, "y": 200} if node == 6000000 else None)
+    t.act(sc, page)
+    assert ("Input.dispatchMouseEvent",
+            {"type": "mouseWheel", "x": 324, "y": 200, "deltaX": 0, "deltaY": 560}) in b.calls

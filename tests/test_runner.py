@@ -491,3 +491,24 @@ def test_near_empty_web_page_counts_as_loading(cfg, monkeypatch):
     r = Runner("s1", Chrome([blank, blank, full], advance_on_observe=2), "read", None, cfg,
                choose=lambda page, goal, history: seen.append(page["text"]) or choose(page, goal, history))
     assert r.run()["status"] == "done" and seen == [full["text"]]
+
+
+# --- a BLOCKED verdict says what Jev was looking at ---------------------------------------------
+
+def test_blocked_result_says_what_jev_saw(cfg):
+    t = FakeTarget([page(click("n1", "Save"), url="https://a/b", text="some words here")])
+    def choose(p, goal, history):
+        return {"choice": "BLOCKED", "operation": "BLOCKED", "target": None, "confidence": 0.7,
+                "probabilities": {"BLOCKED": 0.7}, "latency_ms": 1, "usage": {},
+                "operation_probabilities": {"BLOCKED": 0.7, "CLICK": 0.3}}
+    out = Runner("s1", t, "x", None, cfg, choose=choose).run()
+    assert out["status"] == "blocked" and out["reason"] == "jev_blocked"
+    assert out["detail"] == {"url": "https://a/b", "text_chars": 15, "controls": {"click": 1},
+                             "weighed": {"BLOCKED": 0.7, "CLICK": 0.3}}
+
+
+def test_blocked_with_nothing_to_click_says_no_controls(cfg):
+    t = FakeTarget([page(url="https://a/b", text="x" * 50)])
+    out = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["BLOCKED"])).run()
+    assert out["detail"]["why"] == "no_controls" and out["detail"]["controls"] == {}
+    assert out["detail"]["weighed"] == {}

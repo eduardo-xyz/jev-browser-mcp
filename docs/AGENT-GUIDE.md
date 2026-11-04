@@ -59,7 +59,12 @@ tab and closes the one it came from when the session ends. While a page shows lo
 20 s per run, before asking Jev anything: no more BLOCKED on a navigation shell. Controls that another
 element is sitting on (an open panel, a sticky bar) are left out of the observed actions, since a click
 there would land on the covering element. Pages built from web components (shadow DOM) are read through
-their shadow roots, and their controls are clicked there too. A page whose observe comes back with empty `text` after it has settled really
+their shadow roots, and their controls are clicked there too. Panels that scroll inside the page (a
+log or table in its own scroll box while the window never moves) get `Scroll the list down/up` actions,
+so rows below the fold are reachable without a date picker or a search. The text of a cross-origin
+iframe is part of what Jev and the verifier read, not only of `read()`. A click is refused as stale only
+when its own control or the document changed, not when the page scrolled or another field ticked.
+A page whose observe comes back with empty `text` after it has settled really
 shows nothing in the viewport (one such GHL route renders only a single-button overlay): check the URL
 in a browser before blaming the tool.
 
@@ -135,7 +140,7 @@ Every result carries `timing` (ms per phase: `setup_ms` connect/launch or tab op
 |---|---|---|
 | `done` | Goal done and confirmed by an independent check of the final screen. | Next step. |
 | `unverified` | Jev said done, the check disagreed (`reason`). | Treat as NOT done. `screenshot`, then retry or fix the goal. |
-| `blocked` | Could not continue (`reason`, e.g. `jev_blocked`, `screen_unreadable`, `missing_value`, `stuck_in_loop`, `signed_out`). |
+| `blocked` | Could not continue (`reason`, e.g. `jev_blocked`, `screen_unreadable`, `missing_value`, `stuck_in_loop`, `signed_out`). `jev_blocked` carries `detail`: the URL, `text_chars`, `controls` by kind (plus `in_iframes`, `covered`, `waited_loading_ms` when relevant) and `weighed` (how BLOCKED scored against acting). `why: no_controls` means nothing clickable reached Jev (a canvas, a frame it cannot read, a page still arriving): `screenshot` and report it here. Controls present but a high BLOCKED weight: the goal did not name a control on that screen; name it. |
 | `error` / `stale_page` | Three times in a row the chosen control had changed or was covered between the read and the act. `detail` says which action was refused and why; include it when reporting. | `signed_out` (Chrome): the page redirected to a sign-in screen (account chooser, password, 2FA). Don't retry and don't try another tool: ask Eduardo to sign in in that Chrome window, then run again. A goal that itself asks to sign in is not stopped. `screen_unreadable` right after opening an app: wait 3 s and run again with the same `session_id`. `missing_value`: put the exact text in the goal. `stuck_in_loop`: Jev kept repeating the same tap on the same screen (e.g. opening the wrong account, going back, opening it again) — don't just retry; make the goal name the exact target ("open the account ending 0743", "tap exactly …") or `screenshot` to see where it's stuck. |
 | `paused_needs_input` | A password/PIN/code field (`field`) with nothing stored for that site/app. | **Preferred:** ask Eduardo to type it on the device / in the tab himself, then `resume(session_id, typed=True)`: the value never passes through the chat or your transcript. Better still, have it stored once (`python -m jev_runner.vault set <host-or-package>`, `set-totp` for authenticator codes): jevd then types it before ever pausing, and you never see it. Last resort: `resume(session_id, input=<value>)`; never write the value anywhere else. |
 | `paused_mismatch` | A money button, and the amount/recipient did not both match the screen (`expected` vs `seen`), or a second money action in one run. | Check `expected`/`seen` and a `screenshot`. Approve with `resume(session_id, confirm=True)` only if it is exactly the intended payment. |

@@ -390,6 +390,36 @@ _POINTER_TEXT_JS = """(() => {
 # File inputs, including hidden ones behind a styled "Upload" button (upstream skips type=file).
 # Offered only when the run was given files: choosing one sets the files directly via CDP, so the
 # OS file picker never opens. Label: the input's own name, else the nearest short text around it.
+# Panels that scroll inside the page. Upstream offers "Scroll down" only when the window itself
+# scrolls, but web apps keep the window fixed and scroll a panel (seen: an audit log whose rows
+# live in a 546 px container on a page that never scrolls, so the rows below the fold were out of
+# reach and Jev wandered into a date picker instead). Each visible panel that can scroll further,
+# and that a wheel at its centre would actually move, is offered as a scroll action of its own.
+_SCROLLERS_JS = """(() => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes || !document.body) return [];
+  const out = [], base = 6000000;
+  const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
+  const scrolls = e => e && e.nodeType === 1 && e !== document.documentElement && e !== document.body &&
+    e.scrollHeight > e.clientHeight + 20 && /(auto|scroll)/.test(getComputedStyle(e).overflowY);
+  for (const e of document.querySelectorAll('*')) {
+    if (out.length >= 4) break;
+    if (!scrolls(e) || !vis(e)) continue;
+    const r = e.getBoundingClientRect();
+    if (r.width < 120 || r.height < 120) continue;
+    const x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    let hit = document.elementFromPoint(x, y);
+    while (hit && hit !== e && !scrolls(hit)) hit = hit.parentElement;
+    if (hit !== e) continue;  // covered, or a panel nested there would take the wheel instead
+    const id = base + out.length;
+    c.nodes.set(id, e);
+    out.push({node: id, down: e.scrollTop + e.clientHeight < e.scrollHeight - 2, up: e.scrollTop > 0});
+  }
+  return out;
+})()"""
+
+
 _FILE_INPUTS_JS = """(() => {
   const c = window.__jevFast;
   if (!c || !c.nodes) return [];
@@ -438,6 +468,21 @@ def _pointer_text_actions(found, labels: set, prefix: str = "tx") -> list:
         labels.add(label)
         out.append({"id": f"{prefix}{i + 1}", "node": f["node"], "kind": "click", "label": label,
                     "role": "button", "value": "", "_guard": f.get("guard")})
+    return out
+
+
+def _scroller_actions(found, prefix: str = "sc") -> list:
+    """Scroll actions for panels that scroll inside the page: down and/or up, per panel. The node
+    is the panel itself, so act() wheels over it rather than over the window."""
+    out = []
+    for i, f in enumerate(found if isinstance(found, list) else []):
+        if not isinstance(f, dict) or not isinstance(f.get("node"), int):
+            continue
+        nth = f" {i + 1}" if i else ""
+        for way, delta in (("down", 560), ("up", -560)):
+            if f.get(way):
+                out.append({"id": f"{prefix}{i + 1}{way[0]}", "kind": "scroll", "node": f["node"],
+                            "label": f"Scroll the list{nth} {way}", "delta": delta, "scroller": True})
     return out
 
 
@@ -625,9 +670,13 @@ def fresh_check(evaluate, page: dict, action: dict | None) -> bool:
     text, every control) for anything but click/select, so on a page that keeps re-rendering
     (live timestamps, polling widgets) every wait/fill came back stale and the run died after
     three strikes without ever acting. Here only the action's own target has to be unchanged
-    (identity, role, name, value, enclosing form/row text), plus the page key (URL and every
-    field's value), which is what upstream checks for a click. Waiting and scrolling send no
-    input to any element, so they are never stale. No action: the whole-page marker, as before."""
+    (identity, role, name, value, enclosing form/row text), in the same document (same load,
+    same URL). The rest of upstream's page key (scroll position, viewport, every other field's
+    value) describes the page around the target, not the target: a list that scrolls itself or a
+    clock in another field must not refuse a click on an unchanged link (seen: an audit log where
+    "Open in new tab" was refused three times in 400 ms while the row never changed). Waiting and
+    scrolling send no input to any element, so they are never stale. No action: the whole-page
+    marker, as before."""
     if action is None:
         from jev_ultrafast import browser as ub  # lazy: nothing touches the harness at import
         return evaluate(ub.MARKER) == page.get("marker")  # ub.MARKER: patched for shadow DOM
@@ -637,7 +686,16 @@ def fresh_check(evaluate, page: dict, action: dict | None) -> bool:
     if type(node) is not int:
         return False
     current = evaluate(_NODE_FRESH % node)
-    return current == [page.get("page_key"), (page.get("guards") or {}).get(str(node))]
+    if not isinstance(current, list) or len(current) != 2:
+        return False
+    key, guard = current
+    return (_document_of(key) == _document_of(page.get("page_key"))
+            and guard == (page.get("guards") or {}).get(str(node)))
+
+
+def _document_of(page_key):
+    """The document part of upstream's page key: its load time and URL (the first two entries)."""
+    return page_key[:2] if isinstance(page_key, list) else page_key
 
 
 def _default_factory(url: str, background: bool):
@@ -751,6 +809,7 @@ class ChromeTarget:
         self._add_overlay_actions(page)
         self._add_icon_controls(page)
         self._add_pointer_text(page)
+        self._add_scrollers(page)
         if self._files:
             try:
                 page.setdefault("actions", []).extend(_file_input_actions(
@@ -817,6 +876,12 @@ class ChromeTarget:
                 self._detach(session_id)
                 continue
             self._frames[idx] = {"session": session_id, "origin": _origin(url)}
+            frame_text = snap.get("text") if isinstance(snap.get("text"), str) else ""
+            if frame_text.strip():
+                # Jev (and the verifier) decide on page["text"], which innerText stops at the
+                # iframe boundary: without this a white-labelled screen looked empty to Jev even
+                # though its controls were offered (BLOCKED at step 0; DONE then "unverified").
+                page["text"] = ((page.get("text") or "") + "\n" + frame_text)[:READ_LIMIT]
             try:
                 icons = _icon_control_actions(self._frame_eval(session_id, _ICON_CONTROLS_JS), "ic")
             except Exception:
@@ -833,6 +898,10 @@ class ChromeTarget:
             for a in texts:
                 a.pop("_guard", None)  # in-frame act resolves by node; no upstream freshness check
             raw += texts
+            try:
+                raw += _scroller_actions(self._frame_eval(session_id, _SCROLLERS_JS))
+            except Exception:
+                pass  # never let discovery break a normal observe
             if self._files:
                 try:
                     raw += _file_input_actions(self._frame_eval(session_id, _FILE_INPUTS_JS),
@@ -855,8 +924,11 @@ class ChromeTarget:
                     # the real content scrolls inside the iframe, not the top page; offer the
                     # iframe's own scroll so Jev can reach rows below its fold (act routes it in)
                     existing.add(aid)
-                    actions.append({"id": aid, "kind": "scroll", "label": a.get("label", ""),
-                                    "delta": a.get("delta", 0), "frame": idx})
+                    merged = {"id": aid, "kind": "scroll", "label": a.get("label", ""),
+                              "delta": a.get("delta", 0), "frame": idx}
+                    if a.get("scroller") and isinstance(a.get("node"), int):
+                        merged["frame_node"], merged["scroller"] = a["node"], True
+                    actions.append(merged)
                     merged_count += 1
                     continue
                 if not isinstance(a.get("node"), int):
@@ -885,7 +957,7 @@ class ChromeTarget:
             # iframe change is seen as progress. (Top-only pages are left exactly as upstream made them.)
             frame_sig = json.dumps(
                 [(a["id"], a.get("label"), a.get("value")) for a in actions if a.get("frame")],
-                sort_keys=True)
+                sort_keys=True) + (page.get("text") or "")
             page["fingerprint"] = hashlib.sha256(
                 (str(page.get("fingerprint", "")) + frame_sig).encode()).hexdigest()
 
@@ -946,6 +1018,13 @@ class ChromeTarget:
         for a in _pointer_text_actions(found, {x.get("label") for x in actions}):
             _record_guard(page, {"node": a["node"], "guard": a.pop("_guard")})
             actions.append(a)
+
+    def _add_scrollers(self, page: dict) -> None:
+        try:
+            found = self.browser.evaluate(_SCROLLERS_JS)
+        except Exception:
+            return  # never let discovery break a normal observe
+        page.setdefault("actions", []).extend(_scroller_actions(found))
 
     def _frame_overlay_actions(self, session_id, labels: set) -> list:
         """Overlay/menu options inside an OOPIF (a row menu opened in the iframe renders there)."""
@@ -1152,6 +1231,9 @@ class ChromeTarget:
         if action.get("frame") is not None:
             self._act_in_frame(action, text)  # OOPIF: separate path; top-frame/money path unchanged
             return
+        if action.get("scroller"):
+            self._act_scroller(action)  # wheel over a panel, not over the window
+            return
         # Freshness is checked here, before any input; our StalePage is only ever raised from this check.
         try:
             is_fresh = self.browser.fresh(page, action)
@@ -1176,6 +1258,21 @@ class ChromeTarget:
                 raise RuntimeError(f"action_uncertain: {exc}") from exc
         if before is not None:
             self._follow_new_tab(before)
+
+    def _act_scroller(self, action: dict) -> None:
+        """Wheel over a panel that scrolls inside the page, resolved by node like a click: a panel
+        that is gone or covered is a retryable StalePage, before any input."""
+        try:
+            center = self.browser.evaluate(f"{_RESOLVE_IN_FRAME_FN}({int(action['node'])})")
+        except Exception as exc:
+            raise StalePage("Panel gone since this decision. Observe again.") from exc
+        if not isinstance(center, dict):
+            raise StalePage("Panel changed or is covered. Observe again.")
+        try:
+            self.browser.call("Input.dispatchMouseEvent", type="mouseWheel", x=center["x"],
+                              y=center["y"], deltaX=0, deltaY=action.get("delta", 0))
+        except Exception as exc:
+            raise RuntimeError(f"action_uncertain: {exc}") from exc
 
     # --- a click that opens a new tab ---------------------------------------------------------
     # Seen: a contact page's "Audit logs" button is window.open to a page of the same site. Jev's
@@ -1292,6 +1389,11 @@ class ChromeTarget:
             if offset is None:
                 raise StalePage("Iframe moved since this decision. Observe again.")
             x, y = offset["x"] + offset["w"] / 2, offset["y"] + offset["h"] / 2  # wheel over the iframe
+            if action.get("frame_node") is not None:  # a panel inside the iframe: wheel over it
+                center = self._resolve_in_frame(frame["session"], action["frame_node"])
+                if center is None:
+                    raise StalePage("Panel changed or is covered. Observe again.")
+                x, y = offset["x"] + center["x"], offset["y"] + center["y"]
             if os.environ.get("JEV_DEBUG_IFRAME"):
                 _log.info("iframe act: kind=scroll delta=%s iframe_offset=%s -> top xy=(%.1f,%.1f)",
                           action.get("delta"), offset, x, y)

@@ -1,6 +1,7 @@
 """Runner: per tick observe -> scrub -> decide -> act -> record."""
 import hashlib
 import logging
+from collections import Counter
 import os
 import re
 import time
@@ -169,6 +170,7 @@ class Runner:
         self._stale = 0
         self._signin_reloaded = False  # one reload of the start URL per run on a sign-in bounce
         self.last_stale: dict | None = None  # why the last action was refused as stale (result detail)
+        self.last_blocked: dict | None = None  # what Jev was looking at when it gave up (result detail)
         self._load_waited = 0.0  # seconds spent waiting on a loading page without asking Jev
         self._load_clear = LOAD_CLEAR_READS  # clear reads since the last loading one (none seen yet)
         self._obs_log: list[tuple[str, str]] = []  # recent (where, text): a field can scroll off
@@ -461,6 +463,29 @@ class Runner:
             return True
         return False
 
+    def _blocked_detail(self, decision: dict, page: dict) -> dict:
+        """What Jev was looking at when it gave up: the screen's size and controls, and how BLOCKED
+        weighed against acting. Jev's answer is a bare choice, so this is the only record of the
+        cause: "no_controls" means the content never reached Jev (a canvas, an unreadable frame,
+        a page still arriving), while controls with a low BLOCKED weight mean the goal did not
+        name a target Jev could match."""
+        actions = page.get("actions") or []
+        controls = Counter(a.get("kind") for a in actions if a.get("kind") not in ("wait", "scroll"))
+        probs = (decision or {}).get("operation_probabilities") or {}
+        top = sorted(probs.items(), key=lambda kv: -kv[1])[:3]
+        detail = {"url": page.get("url", ""), "text_chars": len(page.get("text") or ""),
+                  "controls": dict(controls), "weighed": {k: round(float(v), 2) for k, v in top}}
+        in_frames = sum(1 for a in actions if a.get("frame"))
+        if in_frames:
+            detail["in_iframes"] = in_frames
+        if page.get("covered"):
+            detail["covered"] = page["covered"]
+        if self._load_waited:
+            detail["waited_loading_ms"] = round(self._load_waited * 1000)
+        if not controls:
+            detail["why"] = "no_controls"
+        return detail
+
     @staticmethod
     def _choice_label(decision, page: dict) -> str:
         choice = (decision or {}).get("choice") if isinstance(decision, dict) else None
@@ -715,6 +740,7 @@ class Runner:
         if choice == "BLOCKED":
             if self._check(page) is True:  # Jev gave up, but the goal is visibly met
                 raise _Stop("done", "verified_after_blocked")
+            self.last_blocked = self._blocked_detail(decision, page)
             raise _Stop("blocked", "jev_blocked")
         action = next((a for a in page["actions"] if a["id"] == choice), None)
         if action is None:
