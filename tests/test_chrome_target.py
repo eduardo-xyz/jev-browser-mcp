@@ -599,7 +599,7 @@ def test_iframe_icon_button_gets_row_disambiguated_label(monkeypatch):
     assert by_id["f1e1"]["synth_label"] is True and by_id["f1e1"]["raw_label"] == "button"
     assert by_id["f1e3"]["label"] == "Create workflow" and "synth_label" not in by_id["f1e3"]
     # only blank nodes are asked about, in the frame's own session, by their in-frame node id
-    label_evals = [e for e in evals if "rowOf" in e[1]]
+    label_evals = [e for e in evals if e[1].startswith(chrome_mod._ICON_LABEL_FN)]
     assert len(label_evals) == 1 and label_evals[0][0] == "S1"
     assert label_evals[0][1].endswith("([7, 8])")
 
@@ -1061,12 +1061,12 @@ def _scroller_target(found):
 
 
 def test_panels_that_scroll_inside_the_page_are_offered_and_wheeled_over():
-    t, b = _scroller_target([{"node": 6000000, "down": True, "up": False},
+    t, b = _scroller_target([{"node": 6000000, "down": True, "up": False, "head": "Properties"},
                              {"node": 6000001, "down": True, "up": True}])
     page = t.observe()
     sc = [(a["id"], a["label"], a["delta"]) for a in page["actions"] if a.get("scroller")]
-    assert sc == [("sc1d", "Scroll the list down", 560), ("sc2d", "Scroll the list 2 down", 560),
-                  ("sc2u", "Scroll the list 2 up", -560)]
+    assert sc == [("sc1d", "Scroll the list — Properties down", 560),
+                  ("sc2d", "Scroll the list 2 down", 560), ("sc2u", "Scroll the list 2 up", -560)]
     t.act(next(a for a in page["actions"] if a["id"] == "sc2u"), page)
     assert b.acts == []  # not upstream's wheel over the window
     assert ("Input.dispatchMouseEvent",
@@ -1208,3 +1208,49 @@ def test_iframe_loaders_and_changing_text_flag_the_page_as_loading(monkeypatch):
     chrome_mod._sleep(2.0)
     state["loading"] = True
     assert t.observe()["loading"] is True  # a spinner came back
+
+
+# --- focusable widget triggers that are not controls to the snapshot --------------------------
+
+def test_focusable_dropdown_triggers_become_named_click_actions():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    g = [7000000, None, "Status: Pending", None]
+    def ev(expr):
+        if expr == chrome_mod._WIDGETS_JS:
+            return [{"node": 7000000, "label": "Status: Pending", "guard": g},
+                    {"node": 7000001, "label": "Search", "guard": None}]  # already offered
+        return []
+    f.browsers[0].evaluate = ev
+    f.browsers[0].observe = lambda screenshot=False: {"url": "u", "text": "", "actions": [
+        {"id": "e1", "node": 1, "kind": "fill", "label": "Search", "role": "searchbox"}]}
+    page = t.observe()
+    wd = [a for a in page["actions"] if a["id"].startswith("wd")]
+    assert [(a["id"], a["label"], a["kind"], a["role"]) for a in wd] == [("wd1", "Status: Pending", "click", "combobox")]
+    assert page["guards"]["7000000"] == g and all("_guard" not in a for a in page["actions"])
+
+
+def test_iframe_widget_triggers_merged(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: []
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": []})
+    monkeypatch.setattr(t, "_frame_eval", lambda sid, expr: (
+        [{"node": 7000000, "label": "Priority: Low"}] if expr == chrome_mod._WIDGETS_JS else []))
+    acts = {a["id"]: a for a in t.observe()["actions"] if a.get("frame")}
+    assert acts["f1wd1"]["label"] == "Priority: Low" and acts["f1wd1"]["frame_node"] == 7000000
+
+
+def test_controls_still_identical_after_row_context_are_numbered():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: ({"1": "Active", "2": "Active"} if expr.startswith(chrome_mod._ROW_CONTEXT_FN) else [])
+    b.observe = lambda screenshot=False: {"url": "u", "text": "", "actions": [
+        {"id": "e1", "node": 1, "kind": "click", "label": "Assign user Action", "role": "button"},
+        {"id": "e2", "node": 2, "kind": "click", "label": "Assign user Action", "role": "button"},
+        {"id": "e3", "node": 3, "kind": "click", "label": "Assign user Action", "role": "button"}]}
+    labels = [a["label"] for a in t.observe()["actions"]]
+    assert labels == ["Assign user Action — Active", "Assign user Action — Active (2)",
+                      "Assign user Action"]  # the third is unique once the others carry a row

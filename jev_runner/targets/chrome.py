@@ -354,6 +354,15 @@ def _disambiguate_duplicates(actions: list, node_key: str, evaluate) -> int:
             a["raw_label"], a["label"] = a["label"], f"{a['label']} — {row.strip()}"[:80]
             a["row_label"] = True
             count += 1
+    # Still identical after that (several workflow nodes named alike, each its own row): number
+    # them, so "the second one" is a control Jev can pick instead of the first one four times over.
+    seen: dict = {}
+    for a in dups:
+        n = seen[(a.get("kind"), a["label"])] = seen.get((a.get("kind"), a["label"]), 0) + 1
+        if n > 1:
+            a.setdefault("raw_label", a["label"])
+            a["label"], a["row_label"] = f"{a['label']} ({n})", True
+            count += 1
     return count
 
 
@@ -451,6 +460,8 @@ _SCROLLERS_JS = """(() => {
   const c = window.__jevFast;
   if (!c || !c.nodes || !document.body) return [];
   const out = [], base = 6000000;
+  const clean = s => String(s || '').replace(/\\s+/g, ' ').trim();
+""" + _ROW_HELPERS_JS + """
   const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
   const scrolls = e => e && e.nodeType === 1 && e !== document.documentElement && e !== document.body &&
     e.scrollHeight > e.clientHeight + 20 && /(auto|scroll)/.test(getComputedStyle(e).overflowY);
@@ -466,7 +477,59 @@ _SCROLLERS_JS = """(() => {
     if (hit !== e) continue;  // covered, or a panel nested there would take the wheel instead
     const id = base + out.length;
     c.nodes.set(id, e);
-    out.push({node: id, down: e.scrollTop + e.clientHeight < e.scrollHeight - 2, up: e.scrollTop > 0});
+    out.push({node: id, down: e.scrollTop + e.clientHeight < e.scrollHeight - 2, up: e.scrollTop > 0,
+              head: firstLine(e.innerText).slice(0, 30)});  // the panel's first line names it
+  }
+  return out;
+})()"""
+
+
+# Focusable widgets that are not controls to the snapshot: a dropdown trigger built as a
+# <div tabindex="0"> with no role and no pointer cursor (seen: every property field of a
+# Freshdesk ticket, Status among them, is such a trigger). Taken when the element is focusable,
+# outside any real control, and either carries popup/owner ARIA attributes or is named like a
+# select/dropdown/trigger. Labelled "<field label>: <current text>" ("Status: Pending") so a goal
+# can name the field. Registered in upstream's node map with the real guard. Bounded.
+_WIDGETS_JS = """(() => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes || !document.body) return [];
+  const CONTROL = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],' + ['button', 'link',
+    'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemradio', 'menuitemcheckbox', 'option',
+    'gridcell', 'combobox', 'textbox', 'searchbox', 'spinbutton'].map(r => '[role="' + r + '"]').join(',');
+  const clean = s => String(s || '').replace(/\\s+/g, ' ').trim();
+  const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
+  const widget = /select|dropdown|trigger|combobox|picker/i;
+  const aria = ['aria-haspopup', 'aria-expanded', 'aria-owns', 'aria-controls', 'aria-activedescendant'];
+  const known = new Set(c.nodes.values());
+  const fieldOf = e => {
+    let n = e.parentElement;
+    for (let i = 0; i < 4 && n && n !== document.body; i++, n = n.parentElement) {
+      for (const l of n.querySelectorAll('label,[class*="label"]')) {
+        if (e.contains(l) || l.contains(e)) continue;
+        const t = clean(l.textContent);
+        if (t && t.length <= 40) return t;
+      }
+    }
+    return '';
+  };
+  const out = [], base = 7000000, area = innerWidth * innerHeight;
+  for (const e of document.querySelectorAll('[tabindex]')) {
+    if (out.length >= 40) break;
+    const ti = parseInt(e.getAttribute('tabindex'), 10);
+    if (isNaN(ti) || ti < 0 || known.has(e) || e.matches(CONTROL) || e.closest(CONTROL)) continue;
+    if (e.getAttribute('role')) continue;  // a role upstream chose not to take
+    const cls = typeof e.className === 'string' ? e.className : '';
+    if (!aria.some(a => e.hasAttribute(a)) && !widget.test(cls)) continue;
+    if (!vis(e)) continue;
+    const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (!r.width || !r.height || r.width * r.height > area / 4 || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !e.contains(hit)) continue;  // covered
+    const text = clean(e.innerText).slice(0, 40), field = fieldOf(e);
+    const label = field && text ? field + ': ' + text : (field || text || 'dropdown');
+    const id = base + out.length;
+    c.nodes.set(id, e);
+    out.push({node: id, label, guard: c.guard ? c.guard(e) : null});
   }
   return out;
 })()"""
@@ -523,6 +586,20 @@ def _pointer_text_actions(found, labels: set, prefix: str = "tx") -> list:
     return out
 
 
+def _widget_actions(found, labels: set, prefix: str = "wd") -> list:
+    """Click actions for focusable widget triggers (see _WIDGETS_JS), skipping labels already offered."""
+    out = []
+    for i, f in enumerate(found if isinstance(found, list) else []):
+        label = f.get("label") if isinstance(f, dict) else None
+        if not isinstance(label, str) or not label.strip() or label in labels \
+                or not isinstance(f.get("node"), int):
+            continue
+        labels.add(label)
+        out.append({"id": f"{prefix}{i + 1}", "node": f["node"], "kind": "click", "label": label,
+                    "role": "combobox", "value": "", "_guard": f.get("guard")})
+    return out
+
+
 def _scroller_actions(found, prefix: str = "sc") -> list:
     """Scroll actions for panels that scroll inside the page: down and/or up, per panel. The node
     is the panel itself, so act() wheels over it rather than over the window."""
@@ -530,11 +607,12 @@ def _scroller_actions(found, prefix: str = "sc") -> list:
     for i, f in enumerate(found if isinstance(found, list) else []):
         if not isinstance(f, dict) or not isinstance(f.get("node"), int):
             continue
-        nth = f" {i + 1}" if i else ""
+        head = f.get("head") if isinstance(f.get("head"), str) else ""
+        what = f"the list — {head.strip()}" if head.strip() else f"the list{f' {i + 1}' if i else ''}"
         for way, delta in (("down", 560), ("up", -560)):
             if f.get(way):
                 out.append({"id": f"{prefix}{i + 1}{way[0]}", "kind": "scroll", "node": f["node"],
-                            "label": f"Scroll the list{nth} {way}", "delta": delta, "scroller": True})
+                            "label": f"Scroll {what} {way}", "delta": delta, "scroller": True})
     return out
 
 
@@ -886,6 +964,7 @@ class ChromeTarget:
         self._add_overlay_actions(page)
         self._add_icon_controls(page)
         self._add_pointer_text(page)
+        self._add_widgets(page)
         self._add_scrollers(page)
         if self._files:
             try:
@@ -980,6 +1059,14 @@ class ChromeTarget:
             for a in texts:
                 a.pop("_guard", None)  # in-frame act resolves by node; no upstream freshness check
             raw += texts
+            try:
+                widgets = _widget_actions(self._frame_eval(session_id, _WIDGETS_JS),
+                                          {a.get("label") for a in raw})
+            except Exception:
+                widgets = []  # never let discovery break a normal observe
+            for a in widgets:
+                a.pop("_guard", None)  # in-frame act resolves by node; no upstream freshness check
+            raw += widgets
             try:
                 raw += _scroller_actions(self._frame_eval(session_id, _SCROLLERS_JS))
             except Exception:
@@ -1115,6 +1202,16 @@ class ChromeTarget:
             return  # never let discovery break a normal observe
         actions = page.setdefault("actions", [])
         for a in _pointer_text_actions(found, {x.get("label") for x in actions}):
+            _record_guard(page, {"node": a["node"], "guard": a.pop("_guard")})
+            actions.append(a)
+
+    def _add_widgets(self, page: dict) -> None:
+        try:
+            found = self.browser.evaluate(_WIDGETS_JS)
+        except Exception:
+            return  # never let discovery break a normal observe
+        actions = page.setdefault("actions", [])
+        for a in _widget_actions(found, {x.get("label") for x in actions}):
             _record_guard(page, {"node": a["node"], "guard": a.pop("_guard")})
             actions.append(a)
 
