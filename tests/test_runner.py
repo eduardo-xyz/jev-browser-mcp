@@ -605,6 +605,35 @@ def test_runner_sends_the_model_a_capped_view(cfg):
     assert seen == [255]
 
 
+def _bring(i, title):
+    return {"id": f"bv{i}", "kind": "scroll", "node": 8000000 + i, "pan_to": True, "label": f"Bring {title} into view"}
+
+
+def test_a_quoted_off_screen_title_is_brought_into_view_without_asking_the_model(cfg):
+    calls = []
+    def choose(view, goal, history):
+        calls.append([a["id"] for a in view["actions"]])
+        return {"choice": "DONE", "operation": "DONE"}
+    before = page(click("n1", "Fit to Screen"), _bring(1, "Go To 4 Hour Wait"), _bring(2, "WAIT 4 hours"), text="x" * 50)
+    after = page(click("n1", "Fit to Screen"), click("n2", "WAIT 4 hours"), _bring(1, "Go To 4 Hour Wait"), text="y" * 50)
+    t = FakeTarget([before, after])
+    out = Runner("s1", t, "bring the node 'WAIT 4 hours' into view, then click it", None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted] == ["bv2"]               # the quoted title, not the look-alike
+    assert len(calls) == 1 and "n2" in calls[0]            # the model was asked only once the node was on screen
+    assert out["model_calls"] == 1 and out["last_actions"] == ["scroll · Bring WAIT 4 hours into view"]
+
+
+def test_a_quoted_title_already_on_screen_leaves_the_choice_to_the_model(cfg):
+    calls = []
+    def choose(view, goal, history):
+        calls.append(1)
+        return {"choice": "DONE", "operation": "DONE"}
+    pg = page(click("n2", "WAIT 4 hours"), _bring(1, "Go To 4 Hour Wait"), _bring(2, "WAIT 4 hours"), text="x" * 50)
+    t = FakeTarget([pg])
+    Runner("s1", t, "bring the node 'WAIT 4 hours' into view, then click it", None, cfg, choose=choose).run()
+    assert calls == [1] and t.acted == []
+
+
 def test_blocked_detail_lists_the_canvas_node_titles(cfg):
     bring = [{"id": f"bv{i}", "kind": "scroll", "node": 8000000 + i, "pan_to": True,
               "label": f"Bring {t} into view"} for i, t in enumerate(["WAIT", "Remove Tag", "END"])]

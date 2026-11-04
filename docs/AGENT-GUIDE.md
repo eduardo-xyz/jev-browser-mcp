@@ -67,7 +67,9 @@ editor's node graph) gets `Pan the <canvas> down/up/left/right` actions: its nod
 in both directions, and every titled node beyond the pane is offered as `Bring <title> into view`, which pans
 to it in one step, measuring as it goes (blind pans overshoot). Quote the title exactly as the card shows it
 (a `jev_blocked` detail lists them under `canvas_nodes`); a node's settings text ("4 hours") is not on its card:
-"bring the node 'WAIT' into view, then click it". Do not ask for "Fit to Screen" or a
+"bring the node 'WAIT' into view, then click it". A title quoted in the goal that matches an offer exactly
+(case and spacing aside) is brought in by the runner itself, without asking Jev, so a look-alike node
+("Go To 4 Hour Wait" next to "WAIT 4 hours") cannot win; quote the full title. Do not ask for "Fit to Screen" or a
 zoom-out on such a canvas: it shrinks node titles below what Jev can read (3 px) and puts hundreds of
 unlabelled controls on screen, more than the model takes. The text of a cross-origin
 iframe is part of what Jev and the verifier read, not only of `read()`. Dropdown triggers built as plain focusable boxes (a ticket's property fields: `Status: Pending`) are offered as

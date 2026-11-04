@@ -167,6 +167,7 @@ def cap_for_model(actions: list[dict], goal: str, limit: int = MODEL_TARGET_LIMI
 
 
 BRING_LIMIT = 12   # "Bring <title> into view" offers kept per decision, goal-named ones first
+_QUOTED = re.compile(r"['\"\u201c\u2018]([^'\"\u201d\u2019]{2,60})['\"\u201d\u2019]")   # 'a title' or "a title" in a goal
 
 
 def trim_bring_into_view(actions: list[dict], goal: str, limit: int = BRING_LIMIT) -> list[dict]:
@@ -706,7 +707,34 @@ class Runner:
                 parts.append(t)
         return scrub_text("\n".join(parts), self.secrets)
 
+    def _bring_named(self, view: dict) -> dict | None:
+        """The off-screen offer whose title the goal quotes exactly, while nothing on screen carries
+        that label. A quoted title is a fact, not a preference: a workflow with a "Go To 4 Hour Wait"
+        node kept outscoring the quoted "WAIT 4 hours" at the model, so this is decided here."""
+        offers = [a for a in view.get("actions") or [] if a.get("pan_to")]
+        if not offers:
+            return None
+        norm = lambda text: " ".join((text or "").split()).casefold()
+        on_screen = {norm(a.get("raw_label") or (a.get("label") or "").split(" — ")[0])
+                     for a in view["actions"] if a.get("kind") in ("click", "fill", "select")}
+        for quoted in _QUOTED.findall(self.goal or ""):
+            want = norm(quoted)
+            if not want or want in on_screen:
+                continue
+            for a in offers:
+                title = (a.get("label") or "")[len("Bring "):-len(" into view")]
+                if norm(title) == want:
+                    return a
+        return None
+
     def _decide(self, view: dict) -> dict:
+        named = self._bring_named(view)
+        if named is not None:  # no model call: the goal names it and it is not on screen yet
+            _log.info("session=%s goal names an off-screen node: %s", self.session_id, named["label"])
+            op = named["id"].upper()
+            return {"choice": named["id"], "operation": op, "target": None, "confidence": 1.0,
+                    "probabilities": {named["id"]: 1.0}, "operation_probabilities": {op: 1.0},
+                    "shortcut": "bring_named"}
         self.model_calls += 1
         capped = cap_for_model(trim_bring_into_view(view["actions"], self.goal), self.goal,
                                text=view.get("text") or "")
