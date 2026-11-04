@@ -634,6 +634,35 @@ def test_a_quoted_title_already_on_screen_leaves_the_choice_to_the_model(cfg):
     assert calls == [1] and t.acted == []
 
 
+def test_quoted_labels_after_a_click_verb_are_clicked_in_order_without_the_model(cfg):
+    calls = []
+    def choose(view, goal, history):
+        calls.append([a["id"] for a in view["actions"]])
+        return {"choice": "DONE", "operation": "DONE"}
+    panel = page(click("k1", "button — minutes"), click("u1", "Unit: minutes"), click("sv", "Save"), text="x" * 50)
+    opened = page(click("k1", "button — minutes"), click("u1", "Unit: minutes"), click("d1", "days"),
+                  click("h1", "hours"), click("sv", "Save"), text="y" * 50)
+    after = page(click("k1", "button — minutes"), click("u1", "Unit: days"), click("sv", "Save"), text="z" * 50)
+    t = FakeTarget([panel, opened, after])
+    goal = "click the 'Unit: minutes' dropdown and choose 'days'. Do not click 'Save'."
+    out = Runner("s1", t, goal, None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted] == ["u1", "d1"]           # the dropdown, then the option; never Save
+    assert len(calls) == 1 and out["model_calls"] == 1      # the model only closed the run
+
+
+def test_a_quoted_label_not_on_screen_or_ambiguous_leaves_the_choice_to_the_model(cfg):
+    calls = []
+    def choose(view, goal, history):
+        calls.append(1)
+        return {"choice": "DONE", "operation": "DONE"}
+    t = FakeTarget([page(click("a", "Open"), click("b", "Open"), text="x" * 50)])
+    Runner("s1", t, "click 'Open'", None, cfg, choose=choose).run()
+    assert t.acted == [] and calls == [1]                   # two controls carry the label: ambiguous
+    t = FakeTarget([page(click("a", "Settings"), text="x" * 50)])
+    Runner("s1", t, "click 'Unit: minutes'", None, cfg, choose=choose).run()
+    assert t.acted == [] and calls == [1, 1]                # not on screen: the model decides
+
+
 def test_blocked_detail_lists_the_canvas_node_titles(cfg):
     bring = [{"id": f"bv{i}", "kind": "scroll", "node": 8000000 + i, "pan_to": True,
               "label": f"Bring {t} into view"} for i, t in enumerate(["WAIT", "Remove Tag", "END"])]

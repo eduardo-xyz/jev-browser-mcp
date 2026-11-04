@@ -167,6 +167,11 @@ def cap_for_model(actions: list[dict], goal: str, limit: int = MODEL_TARGET_LIMI
 
 
 BRING_LIMIT = 12   # "Bring <title> into view" offers kept per decision, goal-named ones first
+# "click the 'Unit: minutes' dropdown", "choose 'days'", "open 'Settings'": a quoted label after a click verb
+_CLICK_QUOTED = re.compile(
+    r"\b(?:click|open|choose|select|tap|press|pick|expand|toggle)\b(?:\s+(?:on|the|a|an|into|option|button|tab|menu|dropdown|item|node))*"
+    r"\s*['\"\u201c\u2018]([^'\"\u201d\u2019]{1,60})['\"\u201d\u2019]", re.I)
+_NEGATED = re.compile(r"\b(?:not|never|don't|do not|without|avoid|skip|except|instead of)\b[^.;]*$", re.I)
 _QUOTED = re.compile(r"['\"\u201c\u2018]([^'\"\u201d\u2019]{2,60})['\"\u201d\u2019]")   # 'a title' or "a title" in a goal
 
 
@@ -727,14 +732,40 @@ class Runner:
                     return a
         return None
 
+    def _quoted_click(self, view: dict) -> dict | None:
+        """The control whose label the goal quotes after a click verb ("click the 'Unit: minutes'
+        dropdown"), the first such phrase not yet clicked in this run, when exactly one control on
+        screen carries that label. A negated verb ("do not click 'Save'") never matches. Seen: a
+        select offered as "Unit: minutes" lost four times to the kebab beside it, "button — minutes"."""
+        phrases = []
+        for m in _CLICK_QUOTED.finditer(self.goal or ""):
+            before = (self.goal or "")[max(0, m.start() - 30):m.start()]
+            if _NEGATED.search(before):
+                continue
+            phrases.append(" ".join(m.group(1).split()).casefold())
+        if not phrases:
+            return None
+        norm = lambda text: " ".join((text or "").split()).casefold()
+        done = {norm(h.get("action")) for h in self.history}
+        done |= {norm(h.get("raw_label")) for h in self.history if h.get("raw_label")}
+        for want in phrases:
+            if want in done:
+                continue
+            hits = [a for a in view.get("actions") or [] if a.get("kind") == "click"
+                    and want in (norm(a.get("label")), norm(a.get("raw_label")))]
+            if len(hits) == 1:
+                return hits[0]
+            return None  # not on screen yet, or ambiguous: the model's turn
+        return None
+
     def _decide(self, view: dict) -> dict:
-        named = self._bring_named(view)
-        if named is not None:  # no model call: the goal names it and it is not on screen yet
-            _log.info("session=%s goal names an off-screen node: %s", self.session_id, named["label"])
+        named = self._bring_named(view) or self._quoted_click(view)
+        if named is not None:  # no model call: the goal names it outright
+            _log.info("session=%s goal names the control: %s", self.session_id, named["label"])
             op = named["id"].upper()
             return {"choice": named["id"], "operation": op, "target": None, "confidence": 1.0,
                     "probabilities": {named["id"]: 1.0}, "operation_probabilities": {op: 1.0},
-                    "shortcut": "bring_named"}
+                    "shortcut": "goal_named"}
         self.model_calls += 1
         capped = cap_for_model(trim_bring_into_view(view["actions"], self.goal), self.goal,
                                text=view.get("text") or "")
