@@ -140,6 +140,17 @@ After an executed money action the daemon saves a screenshot and reference under
 - At most one money tap per run.
 - If the outcome is uncertain the session becomes terminal: check the app manually, then `end_session`.
 
+## Nightly smoke run
+
+`python -m jev_runner.smoke` runs a few read-only goals through the running jevd and writes a
+report under `<data dir>/smoke/`; the goals live in `<data dir>/smoke.toml` (sites and ids are
+deployment facts, not code; the docstring of `jev_runner/smoke.py` shows the format). A goal
+passes when the run ends `done` and, if `expect` is set, the final read holds that text. With a
+`[report] post` command and `room`, the one-line summary is posted (a broker CLI, for example).
+Exit code = number of failures. `--dry-run` lists the goals, `--only NAME` runs one, `--no-post`
+skips the post. A launchd agent (`~/Library/LaunchAgents/com.eduardo.jev-smoke.plist`) runs it at
+03:30; the driven Chrome must be up and signed in at that hour.
+
 ## Register with Claude Code
 
 ```bash

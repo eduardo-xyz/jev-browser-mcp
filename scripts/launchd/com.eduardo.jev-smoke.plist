@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.eduardo.jev-smoke</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/uv</string>
+        <string>run</string>
+        <string>--directory</string>
+        <string>/Users/eduardo/Projects/Personal/jev-browser-mcp</string>
+        <string>--env-file</string>
+        <string>/Users/eduardo/Projects/Personal/jev-browser-mcp/.env</string>
+        <string>python</string>
+        <string>-m</string>
+        <string>jev_runner.smoke</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/eduardo/Projects/Personal/jev-browser-mcp</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/eduardo/.local/share/jev-runner/smoke/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/eduardo/.local/share/jev-runner/smoke/launchd.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/eduardo</string>
+    </dict>
+</dict>
+</plist>
