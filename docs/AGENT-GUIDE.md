@@ -65,8 +65,9 @@ log or table in its own scroll box while the window never moves) get `Scroll the
 so rows below the fold are reachable without a date picker or a search. A flow or diagram canvas (a workflow
 editor's node graph) gets `Pan the <canvas> down/up/left/right` actions: its nodes sit beyond the visible pane
 in both directions, and every titled node beyond the pane is offered as `Bring <title> into view`, which pans
-to it in one step, measuring as it goes (blind pans overshoot). So name the node in the goal: "bring the node
-'WAIT 4 hours' into view, then click it". Do not ask for "Fit to Screen" or a
+to it in one step, measuring as it goes (blind pans overshoot). Quote the title exactly as the card shows it
+(a `jev_blocked` detail lists them under `canvas_nodes`); a node's settings text ("4 hours") is not on its card:
+"bring the node 'WAIT' into view, then click it". Do not ask for "Fit to Screen" or a
 zoom-out on such a canvas: it shrinks node titles below what Jev can read (3 px) and puts hundreds of
 unlabelled controls on screen, more than the model takes. The text of a cross-origin
 iframe is part of what Jev and the verifier read, not only of `read()`. Dropdown triggers built as plain focusable boxes (a ticket's property fields: `Status: Pending`) are offered as

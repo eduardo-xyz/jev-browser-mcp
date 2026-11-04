@@ -605,6 +605,15 @@ def test_runner_sends_the_model_a_capped_view(cfg):
     assert seen == [255]
 
 
+def test_blocked_detail_lists_the_canvas_node_titles(cfg):
+    bring = [{"id": f"bv{i}", "kind": "scroll", "node": 8000000 + i, "pan_to": True,
+              "label": f"Bring {t} into view"} for i, t in enumerate(["WAIT", "Remove Tag", "END"])]
+    t = FakeTarget([page(click("n1", "Fit to Screen"), *bring, url="https://a/b", text="x" * 50)])
+    out = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["BLOCKED"])).run()
+    assert out["detail"]["canvas_nodes"] == ["WAIT", "Remove Tag", "END"]
+    assert out["detail"]["sample"] == ["Fit to Screen"]
+
+
 def test_unverified_result_says_what_jev_called_done(cfg, monkeypatch):
     t = FakeTarget([page(click("n1", "Status: Pending"), url="https://a/b", text="ticket")])
     r = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["DONE"]))

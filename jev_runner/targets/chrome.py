@@ -673,8 +673,10 @@ _OFFSCREEN_JS = """(() => {
     const canvas = base + 900000 + k++;
     c.nodes.set(canvas, cv);
     for (const e of cv.querySelectorAll(CONTROL)) {
-      if (out.length >= 40) break;
+      if (out.length >= 80) break;
       if (!(e instanceof HTMLElement) || !vis(e)) continue;
+      const outer = e.parentElement && e.parentElement.closest(CONTROL);
+      if (outer && cv.contains(outer)) continue;  // a control inside a node card: the card is the destination
       const r = e.getBoundingClientRect();
       if (!r.width || !r.height) continue;
       const inside = r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;

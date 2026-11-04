@@ -584,6 +584,11 @@ class Runner:
                             if a.get("kind") not in ("wait", "scroll")][:15]
         if page.get("covered"):
             detail["covered"] = page["covered"]
+        # titles a canvas offers to bring into view: the names as the app shows them, so a goal
+        # can quote one exactly (a node's settings text, "4 hours", is not on its card)
+        canvas = [(a.get("label") or "")[len("Bring "):-len(" into view")] for a in actions if a.get("pan_to")]
+        if canvas:
+            detail["canvas_nodes"] = canvas[:20]
         if self._load_waited:
             detail["waited_loading_ms"] = round(self._load_waited * 1000)
         if detail["text_chars"] == 0 and sum(controls.values()) <= 2:
