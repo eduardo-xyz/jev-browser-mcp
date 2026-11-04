@@ -521,3 +521,31 @@ def test_unverified_result_says_what_jev_called_done(cfg, monkeypatch):
     out = r.run()
     assert out["status"] == "unverified"
     assert out["detail"]["sample"] == ["Status: Pending"] and out["detail"]["controls"] == {"click": 1}
+
+
+# --- a save that landed, then stale strikes on the churn after it ------------------------------
+
+def test_stale_strikes_after_a_landed_action_are_a_verified_done(cfg, monkeypatch):
+    from jev_runner.targets.base import StalePage
+
+    class SaveThenChurn(FakeTarget):
+        def act(self, action, page, text=None, verify=False):
+            if self.acted:  # everything after the first (landed) click is refused as stale
+                raise StalePage("Target changed or is covered.")
+            super().act(action, page, text, verify)
+
+    t = SaveThenChurn([page(click("n1", "Save")), page(click("n2", "Close"), text="Saved")])
+    r = Runner("s1", t, "save the headers", None, cfg, choose=scripted_choose(["n1"] + ["n2"] * 4))
+    monkeypatch.setattr(r, "_check", lambda page: True)
+    out = r.run()
+    assert out["status"] == "done" and out["reason"] == "verified_after_stale"
+    assert [a for a, _ in t.acted] == ["n1"] and "detail" not in out
+
+
+def test_stale_strikes_with_nothing_landed_stay_an_error(cfg, monkeypatch):
+    from jev_runner.targets.base import StalePage
+    t = FakeTarget([page(click("n1", "Save")), page()], raise_on_act=StalePage("Target changed."))
+    r = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["n1"] * 4))
+    monkeypatch.setattr(r, "_check", lambda page: pytest.fail("no action landed: nothing to verify"))
+    out = r.run()
+    assert out["status"] == "error" and out["reason"] == "stale_page"

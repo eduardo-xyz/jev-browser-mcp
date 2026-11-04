@@ -221,6 +221,11 @@ class Runner:
             self.status, self.reason = "error", "stale_page"
             if self._stale < 3:  # raised by observe itself, not by three refused actions
                 self.last_stale = {"action": "observe", "why": (str(e) or "page changed")[:160]}
+            if self._met_after_all():
+                # The last action landed and the page churned after it (a Save closed its modal,
+                # a toast came and went): the goal is visibly met, so this is a success, not an
+                # error (seen: a From Name save that persisted but was reported as stale_page).
+                self.status, self.reason = "done", "verified_after_stale"
         except Exception as e:  # provider/target failures end the run, never escape
             msg = scrub({"text": str(e) or type(e).__name__}, self.secrets)["text"]
             self.status, self.reason = "error", msg[:200]
@@ -786,6 +791,20 @@ class Runner:
                    if _same_screen(h, fp, coarse) and h.get("page_changed") is True
                    and tuple(sorted((h.get("locator") or {}).items())) == key)
         return seen >= LOOP_LIMIT
+
+    def _met_after_all(self) -> bool:
+        """After a run died on stale strikes, whether the goal is visibly met on a fresh read of
+        the screen (only when something was acted on; a run that never acted cannot have won)."""
+        if not self.history:
+            return False
+        try:
+            page = self.target.observe()
+        except Exception:
+            return False
+        try:
+            return self._check(page) is True
+        except Exception:
+            return False
 
     def _check(self, page: dict) -> bool | None:
         """Second opinion on Jev's verdict from the text model; None when unavailable."""

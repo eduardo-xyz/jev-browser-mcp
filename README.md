@@ -118,7 +118,7 @@ navigation_labels = []  # exact button labels you checked only open a menu (neve
 
 Every DONE and BLOCKED verdict from Jev gets a second opinion from the text model on the final
 screen. A rejected DONE returns status `unverified`; a BLOCKED run whose goal is visibly met returns
-`done` (reason `verified_after_blocked`). Only runs confirmed this way are learned.
+`done` (reason `verified_after_blocked`); likewise after three stale strikes that follow a landed action (`verified_after_stale`). Only runs confirmed this way are learned.
 
 By default (`learn=True`) a successful, independently confirmed run is auto-saved as a flow, replayed on matching
 later goals, and self-healed (updated) when the UI drifts. Results may include `flow_used`,
