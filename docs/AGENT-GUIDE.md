@@ -62,7 +62,10 @@ element is sitting on (an open panel, a sticky bar) are left out of the observed
 there would land on the covering element. Pages built from web components (shadow DOM) are read through
 their shadow roots, and their controls are clicked there too. Panels that scroll inside the page (a
 log or table in its own scroll box while the window never moves) get `Scroll the list down/up` actions,
-so rows below the fold are reachable without a date picker or a search. A flow or diagram canvas (a workflow
+so rows below the fold are reachable without a date picker or a search. Jev and the verifier see the text
+in the viewport, and the verifier judges the final screen: a list that fits three tall rows per screen cannot
+verify "read the first 5" (seen on a ticket list: 30 rows a page, three in view, `unverified`). Ask for what
+the screen shows and page through with `read()` after each scroll, or name the row you want. A flow or diagram canvas (a workflow
 editor's node graph) gets `Pan the <canvas> down/up/left/right` actions: its nodes sit beyond the visible pane
 in both directions, and every titled node beyond the pane is offered as `Bring <title> into view`, which pans
 to it in one step, measuring as it goes (blind pans overshoot). Quote the title exactly as the card shows it
