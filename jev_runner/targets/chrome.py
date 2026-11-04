@@ -535,6 +535,16 @@ _WIDGETS_JS = """(() => {
         if (t && t.length <= 40) return t;
       }
     }
+    // no label element: the short text that precedes the widget in its box ("Unit" above a select)
+    n = e.parentElement;
+    for (let i = 0; i < 4 && n && n !== document.body; i++, n = n.parentElement) {
+      for (const leaf of n.querySelectorAll('*')) {
+        if (leaf.children.length || e.contains(leaf) || leaf.contains(e)) continue;
+        if (!(leaf.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+        const t = clean(leaf.textContent);
+        if (t && t.length <= 24 && /[A-Za-z]/.test(t)) return t;
+      }
+    }
     return '';
   };
   const out = [], base = 7000000, area = innerWidth * innerHeight;
