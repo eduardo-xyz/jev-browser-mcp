@@ -525,7 +525,6 @@ _WIDGETS_JS = """(() => {
   const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
   const widget = /select|dropdown|trigger|combobox|picker/i;
   const aria = ['aria-haspopup', 'aria-expanded', 'aria-owns', 'aria-controls', 'aria-activedescendant'];
-  const known = new Set(c.nodes.values());
   const fieldOf = e => {
     let n = e.parentElement;
     for (let i = 0; i < 4 && n && n !== document.body; i++, n = n.parentElement) {
@@ -551,7 +550,9 @@ _WIDGETS_JS = """(() => {
   for (const e of document.querySelectorAll('[tabindex]')) {
     if (out.length >= 40) break;
     const ti = parseInt(e.getAttribute('tabindex'), 10);
-    if (isNaN(ti) || ti < 0 || known.has(e) || e.matches(CONTROL) || e.closest(CONTROL)) continue;
+    // not a control upstream takes (its selector is CONTROL); no registry check: c.guard() registers the
+    // widget in the node map, which hid it from every read after the first
+    if (isNaN(ti) || ti < 0 || e.matches(CONTROL) || e.closest(CONTROL)) continue;
     if (e.getAttribute('role')) continue;  // a role upstream chose not to take
     const cls = typeof e.className === 'string' ? e.className : '';
     if (!aria.some(a => e.hasAttribute(a)) && !widget.test(cls)) continue;
@@ -930,6 +931,7 @@ _POST_OBSERVE_FN = """((nodes, loadingSel) => {
   if (!loading) for (const e of document.querySelectorAll(loadingSel)) {
     try {
       if (!e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) continue;
+      if (e.matches('input,textarea,select') || e.querySelector('input,textarea,select')) continue;
       const r = e.getBoundingClientRect();
       if (r.width * r.height >= 400) { loading = true; break; }  // a spinner or skeleton, not a decoration
     } catch (_) {}
@@ -947,6 +949,8 @@ _FRAME_LOADING_FN = """((loadingSel) => {
   for (const e of document.querySelectorAll(loadingSel)) {
     try {
       if (!e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) continue;
+      // a field whose class carries a loading modifier (a number input's wrapper) is a field, not a loader
+      if (e.matches('input,textarea,select') || e.querySelector('input,textarea,select')) continue;
       const r = e.getBoundingClientRect();
       if (r.width * r.height >= 400) return true;  // a spinner or skeleton, not a decoration
     } catch (_) {}
