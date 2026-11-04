@@ -1074,6 +1074,42 @@ def test_panels_that_scroll_inside_the_page_are_offered_and_wheeled_over():
             {"type": "mouseWheel", "x": 300, "y": 420, "deltaX": 0, "deltaY": -560}) in b.calls
 
 
+def test_a_pannable_canvas_is_offered_in_four_ways_and_wheeled_sideways():
+    # a flow editor's canvas: nothing scrolls, the surface pans under a wheel (seen: a workflow
+    # editor whose nodes sat 2000 px below and 1100 px right of the frame's viewport)
+    t, b = _scroller_target([{"node": 6000001, "pan": True, "name": "vue flow basic flow"}])
+    page = t.observe()
+    pans = [(a["id"], a["label"], a.get("delta_x", 0), a["delta"]) for a in page["actions"] if a.get("pan")]
+    assert pans == [("sc1d", "Pan the vue flow basic flow down", 0, 800),
+                    ("sc1u", "Pan the vue flow basic flow up", 0, -800),
+                    ("sc1l", "Pan the vue flow basic flow left", -800, 0),
+                    ("sc1r", "Pan the vue flow basic flow right", 800, 0)]
+    t.act(next(a for a in page["actions"] if a["id"] == "sc1r"), page)
+    assert ("Input.dispatchMouseEvent",
+            {"type": "mouseWheel", "x": 300, "y": 420, "deltaX": 800, "deltaY": 0}) in b.calls
+
+
+def test_a_canvas_inside_an_iframe_pans_in_the_frame(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: []
+    b.observe = lambda screenshot=False: {"url": "u", "text": "", "actions": [], "fingerprint": "fp0"}
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://editor.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [], "text": "Builder"})
+    monkeypatch.setattr(t, "_frame_eval", lambda sid, expr: (
+        [{"node": 6000000, "pan": True, "name": "canvas"}] if "scrollHeight > e.clientHeight + 20" in expr else []))
+    page = t.observe()
+    right = next(a for a in page["actions"] if a.get("frame") and a["label"] == "Pan the canvas right")
+    assert right["frame_node"] == 6000000 and right["delta_x"] == 800 and right["delta"] == 0
+    assert right["pan"] is True and right["kind"] == "scroll"
+    monkeypatch.setattr(t, "_iframe_offset", lambda origin: {"x": 224, "y": 0, "w": 896, "h": 780})
+    monkeypatch.setattr(t, "_resolve_in_frame", lambda sid, node: {"x": 474, "y": 442})
+    t.act(right, page)
+    assert ("Input.dispatchMouseEvent",
+            {"type": "mouseWheel", "x": 698, "y": 442, "deltaX": 800, "deltaY": 0}) in b.calls
+
+
 def test_a_panel_gone_or_covered_is_a_retryable_stale_page():
     t, b = _scroller_target([{"node": 6000000, "down": True, "up": False}])
     page = t.observe()

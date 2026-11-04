@@ -484,6 +484,27 @@ _SCROLLERS_JS = """(() => {
               name: clean(e.getAttribute('aria-label') || cls).slice(0, 40),  // what the app calls it
               head: firstLine(e.innerText).slice(0, 30)});  // and its first line
   }
+  // Pannable canvases (a flow/diagram editor): a big clipped surface whose child moves by CSS
+  // transform. Nothing scrolls, but a wheel over it pans, so it is offered in all four ways.
+  const area = innerWidth * innerHeight;
+  for (const e of document.querySelectorAll('div,section,main')) {
+    if (out.length >= 6) break;
+    const cs = getComputedStyle(e);
+    if (!/(hidden|clip)/.test(cs.overflow + ' ' + cs.overflowY) || !vis(e)) continue;
+    const r = e.getBoundingClientRect();
+    if (r.width * r.height < area * 0.4) continue;
+    if (![...e.children].some(k => getComputedStyle(k).transform !== 'none')) continue;
+    const x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !e.contains(hit)) continue;  // covered
+    const id = base + out.length;
+    c.nodes.set(id, e);
+    const cls = (typeof e.className === 'string' ? e.className : '').split(/\\s+/)
+      .filter(k => k.length >= 4 && !/\\d/.test(k) && !/^(flex|grid|relative|absolute|overflow|block|inline|hidden|w-full|h-full)/.test(k))
+      .slice(0, 2).join(' ').replace(/[-_]+/g, ' ');
+    out.push({node: id, pan: true, name: clean(e.getAttribute('aria-label') || cls || 'canvas').slice(0, 40)});
+  }
   return out;
 })()"""
 
@@ -616,6 +637,13 @@ def _scroller_actions(found, prefix: str = "sc") -> list:
         what = f"the {name.strip()}" if name.strip() else f"the list{f' {i + 1}' if i else ''}"
         if head.strip():
             what += f" — {head.strip()}"
+        if f.get("pan"):
+            # a canvas pans in every direction; a wheel of 800 moves it a few hundred px
+            for way, dx, dy in (("down", 0, 800), ("up", 0, -800), ("left", -800, 0), ("right", 800, 0)):
+                out.append({"id": f"{prefix}{i + 1}{way[0]}", "kind": "scroll", "node": f["node"],
+                            "label": f"Pan {what} {way}", "delta": dy, "delta_x": dx,
+                            "scroller": True, "pan": True})
+            continue
         for way, delta in (("down", 560), ("up", -560)):
             if f.get(way):
                 out.append({"id": f"{prefix}{i + 1}{way[0]}", "kind": "scroll", "node": f["node"],
@@ -1103,6 +1131,10 @@ class ChromeTarget:
                     existing.add(aid)
                     merged = {"id": aid, "kind": "scroll", "label": a.get("label", ""),
                               "delta": a.get("delta", 0), "frame": idx}
+                    if a.get("delta_x"):
+                        merged["delta_x"] = a["delta_x"]
+                    if a.get("pan"):
+                        merged["pan"] = True
                     if a.get("scroller") and isinstance(a.get("node"), int):
                         merged["frame_node"], merged["scroller"] = a["node"], True
                     actions.append(merged)
@@ -1473,7 +1505,7 @@ class ChromeTarget:
             raise StalePage("Panel changed or is covered. Observe again.")
         try:
             self.browser.call("Input.dispatchMouseEvent", type="mouseWheel", x=center["x"],
-                              y=center["y"], deltaX=0, deltaY=action.get("delta", 0))
+                              y=center["y"], deltaX=action.get("delta_x", 0), deltaY=action.get("delta", 0))
         except Exception as exc:
             raise RuntimeError(f"action_uncertain: {exc}") from exc
 
@@ -1602,7 +1634,7 @@ class ChromeTarget:
                           action.get("delta"), offset, x, y)
             try:
                 self.browser.call("Input.dispatchMouseEvent", type="mouseWheel", x=x, y=y,
-                                  deltaX=0, deltaY=action.get("delta", 0))
+                                  deltaX=action.get("delta_x", 0), deltaY=action.get("delta", 0))
             except Exception as exc:
                 raise RuntimeError(f"action_uncertain: {exc}") from exc
             return

@@ -62,7 +62,11 @@ element is sitting on (an open panel, a sticky bar) are left out of the observed
 there would land on the covering element. Pages built from web components (shadow DOM) are read through
 their shadow roots, and their controls are clicked there too. Panels that scroll inside the page (a
 log or table in its own scroll box while the window never moves) get `Scroll the list down/up` actions,
-so rows below the fold are reachable without a date picker or a search. The text of a cross-origin
+so rows below the fold are reachable without a date picker or a search. A flow or diagram canvas (a workflow
+editor's node graph) gets `Pan the <canvas> down/up/left/right` actions: its nodes sit beyond the visible pane
+in both directions, so name the node in the goal and let Jev pan to it. Do not ask for "Fit to Screen" or a
+zoom-out on such a canvas: it shrinks node titles below what Jev can read (3 px) and puts hundreds of
+unlabelled controls on screen, more than the model takes. The text of a cross-origin
 iframe is part of what Jev and the verifier read, not only of `read()`. Dropdown triggers built as plain focusable boxes (a ticket's property fields: `Status: Pending`) are offered as
 clicks named by their field. Same-named controls (one `Domain Options` per card, one `Open` per row) are told apart by their row:
 `Domain Options — <the card's first line>`, so name the row or card in the goal. A click is refused as stale only
