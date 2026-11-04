@@ -150,7 +150,7 @@ Every result carries `timing` (ms per phase: `setup_ms` connect/launch or tab op
 | `paused_confirm` | A destructive control (Delete/Remove/Eliminar/Trash…, named in `control`). Every such click pauses; `reason` is `destructive_action`, or `destructive_already_attempted` if this run already deleted something (a row-menu Delete plus its dialog's Delete is two confirms). | `screenshot` and check it is exactly the record to delete. Approve with `resume(session_id, confirm=True)` only with the human's OK. If the screen changed meanwhile it re-pauses instead of clicking. |
 | `error` `money_action_uncertain` | A money tap may or may not have gone through. | Do NOT retry. Check the bank app's movements, then `end_session`. |
 | `error` `target_unreachable` | The driven Chrome or device dropped the connection mid-run (Chrome closed, restarted, or running without its remote-debugging port); `detail.error` has the raw message. | Check `status` -> `chrome.cdp_url`, make sure that Chrome is up, then run again with a new session. |
-| `error` other | Provider/device problem (e.g. HTTP 529 = Jev overloaded). | Retry once after a few seconds. |
+| `error` other | Provider/device problem (e.g. HTTP 529 = Jev overloaded; HTTP 422 = the request was rejected, jevd's log has the provider's reason). A screen with more than 255 controls (a whole workflow canvas after Fit to Screen) is trimmed before it reaches Jev, controls named in the goal first: name the control you want. | Retry once after a few seconds. |
 
 ## Only through jev-runner (hard rule)
 

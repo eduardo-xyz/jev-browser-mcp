@@ -550,6 +550,48 @@ def test_other_target_errors_keep_their_message(cfg):
     assert (out["status"], out["reason"]) == ("error", "HTTP 529 overloaded") and "detail" not in out
 
 
+# --- a screen with more controls than the model accepts per question -------------------------
+
+def test_oversized_view_is_capped_with_goal_named_controls_first(cfg):
+    from jev_runner.runner import cap_for_model
+    actions = [click(f"n{i}", f"Step {i}") for i in range(300)] + [click("save", "Save changes")]
+    actions.append({"id": "wait", "kind": "wait", "label": "Wait for the page to update"})
+    actions.append({"id": "sc0d", "kind": "scroll", "node": 6000001, "label": "Scroll the canvas down"})
+    kept = cap_for_model(actions, "click Save changes on the workflow")
+    ops = [a for a in kept if a["kind"] == "click"]
+    ids = [a["id"] for a in ops]
+    assert len(ops) == 255 and "save" in ids                    # the goal's control survives
+    assert ids[:3] == ["n0", "n1", "n2"] and "n299" not in ids  # the rest in screen order, tail dropped
+    assert [a["id"] for a in kept if a["kind"] != "click"] == ["wait", "sc0d"]
+
+
+def test_long_labels_are_capped_by_request_size_before_count(cfg):
+    from jev_runner.runner import cap_for_model, MODEL_BODY_BUDGET
+    actions = [click(f"n{i}", f"Step {i} " + "x" * 400) for i in range(200)]   # 200 < 255, but ~190 KB
+    kept = cap_for_model(actions, "open Step 7", text="t" * 3000)
+    assert 40 < len(kept) < 200 and any(a["id"] == "n7" for a in kept)
+    est = 1500 + 4 * len("open Step 7") + 3000 + sum(2 * len(a["label"]) + 160 for a in kept)
+    assert est <= MODEL_BODY_BUDGET
+
+
+def test_view_under_the_limit_is_untouched(cfg):
+    from jev_runner.runner import cap_for_model
+    actions = [click(f"n{i}", f"Step {i}") for i in range(255)]
+    assert cap_for_model(actions, "anything") is actions
+
+
+def test_runner_sends_the_model_a_capped_view(cfg):
+    seen = []
+
+    def choose(view, goal, history):
+        seen.append(len([a for a in view["actions"] if a["kind"] == "click"]))
+        return {"choice": "DONE", "operation": "DONE"}
+
+    actions = [click(f"n{i}", f"Step {i}") for i in range(300)]
+    Runner("s1", FakeTarget([page(*actions)]), "x", None, cfg, choose=choose).run()
+    assert seen == [255]
+
+
 def test_unverified_result_says_what_jev_called_done(cfg, monkeypatch):
     t = FakeTarget([page(click("n1", "Status: Pending"), url="https://a/b", text="ticket")])
     r = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["DONE"]))

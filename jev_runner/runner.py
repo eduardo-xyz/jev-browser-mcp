@@ -123,6 +123,69 @@ _CONNECTION_LOST = re.compile(
     r"no close frame|connection (?:refused|reset|closed|lost|aborted)|ECONNREFUSED|ECONNRESET|"
     r"remote (?:host|end) closed|not connected to|broken pipe", re.I)
 
+# The choice model takes at most 255 candidates per question (HTTP 422 above it) and a request
+# of roughly 64 KB (HTTP 400 max_tokens_exceeded above it). A workflow canvas after "Fit to
+# Screen" offered 273 click targets in a 68 KB request, so the view is trimmed to both limits:
+# measured on that canvas, 220 controls (60 KB) passed and 255 (68 KB) did not.
+MODEL_TARGET_LIMIT = 255
+MODEL_BODY_BUDGET = 48_000     # estimated request bytes (about 8% under the real size); labels go twice
+_WORD = re.compile(r"[a-z0-9]{3,}")
+
+
+def _element_bytes(action: dict) -> int:
+    return 2 * len(action.get("label") or "") + 160
+
+
+def cap_for_model(actions: list[dict], goal: str, limit: int = MODEL_TARGET_LIMIT, text: str = "",
+                  budget: int = MODEL_BODY_BUDGET) -> list[dict]:
+    """The controls the model gets: at most `limit` distinct ones, within an estimated request
+    size, goal-named ones first, then screen order. Wait and scroll controls are never dropped;
+    a view within both limits comes back unchanged."""
+    ops = [a for a in actions if a.get("kind") in ("click", "fill", "select")]
+    nodes = {a.get("node", a["id"]) for a in ops}
+    size = 1500 + 4 * len(goal or "") + len(text or "") + sum(
+        _element_bytes(next(a for a in ops if a.get("node", a["id"]) == n)) for n in nodes)
+    if len(nodes) <= limit and size <= budget:
+        return actions
+    words = set(_WORD.findall((goal or "").lower()))
+    ranked = sorted(ops, key=lambda a: 0 if words & set(_WORD.findall((a.get("label") or "").lower())) else 1)
+    kept_nodes, kept = set(), []
+    per_kind = Counter()
+    used = 1500 + 4 * len(goal or "") + len(text or "")
+    for a in ranked:
+        node = a.get("node", a["id"])
+        if node not in kept_nodes:
+            cost = _element_bytes(a)
+            if len(kept_nodes) >= limit or per_kind[a["kind"]] >= limit or used + cost > budget:
+                continue
+            kept_nodes.add(node)
+            per_kind[a["kind"]] += 1
+            used += cost
+        kept.append(a)
+    keep_ids = {a["id"] for a in kept}
+    return [a for a in actions if a["id"] in keep_ids or a.get("kind") not in ("click", "fill", "select")]
+
+
+class _LoggingClient:
+    """The model client, with a provider's error body in jevd's log (a bare status code says
+    nothing about a rejected request). Never logs a successful response."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def post(self, *args, **kwargs):
+        response = self._inner.post(*args, **kwargs)
+        if response.is_error:
+            _log.warning("model provider HTTP %s: %s", response.status_code, response.text[:300])
+        return response
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+if not isinstance(model.CLIENT, _LoggingClient):
+    model.CLIENT = _LoggingClient(model.CLIENT)
+
 
 class Runner:
     settle_delay = 0.4  # seconds between reads when checking a paused screen holds still
@@ -620,6 +683,11 @@ class Runner:
 
     def _decide(self, view: dict) -> dict:
         self.model_calls += 1
+        capped = cap_for_model(view["actions"], self.goal, text=view.get("text") or "")
+        if len(capped) < len(view["actions"]):
+            _log.info("session=%s view trimmed for the model: %d of %d controls kept",
+                      self.session_id, len(capped), len(view["actions"]))
+            view = {**view, "actions": capped}
         decision = self._timed("decide_ms", self._choose, view, self.goal, self.history)
         if os.environ.get("JEV_DEBUG_IFRAME"):
             probs = decision.get("probabilities", {}) or {}
