@@ -203,6 +203,46 @@ _OVERLAY_JS = """(() => {
 # such as "fa-trash"), else aria-haspopup ("menu"), else the role; then append the nearest
 # row/item text so the label names the row it acts on ("menu — Allen Brothers"). Read-only: it never
 # assigns node ids or changes the page. Returns {node id: label} for nodes it could label.
+# The row or card a control sits in, by its first line of text: the table row, list item or
+# article around it, else the nearest small ancestor (a card is a <div>, not a row).
+_ROW_HELPERS_JS = """
+  const firstLine = (t, skip) => {
+    for (const line of String(t || '').split(/[\\n\\t]/)) {
+      const s = clean(line);
+      if (s && s !== skip && /[\\p{L}\\p{N}]/u.test(s)) return s.slice(0, 50);
+    }
+    return '';
+  };
+  const rowOf = e => {
+    const row = e.closest('tr,[role="row"],li,[role="listitem"],[role="option"],article');
+    if (row) return firstLine(row.innerText);
+    let n = e.parentElement;
+    for (let i = 0; n && n !== document.body && i < 5; i++, n = n.parentElement) {
+      const t = n.innerText || '';
+      if (t.length > 300) break;  // reached a container, not a row
+      const s = firstLine(t);
+      if (s) return s;
+    }
+    return '';
+  };
+"""
+
+# Row context for same-named controls (see _disambiguate_duplicates).
+_ROW_CONTEXT_FN = """((ids) => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes) return {};
+  const clean = s => String(s || '').replace(/\\s+/g, ' ').trim();
+""" + _ROW_HELPERS_JS + """
+  const out = {};
+  for (const id of ids) {
+    const e = c.nodes.get(id);
+    if (!e || !e.isConnected) continue;
+    const row = rowOf(e);
+    if (row) out[id] = row;
+  }
+  return out;
+})"""
+
 _ICON_LABEL_FN = """((ids) => {
   const c = window.__jevFast;
   if (!c || !c.nodes) return {};
@@ -236,25 +276,7 @@ _ICON_LABEL_FN = """((ids) => {
     }
     return '';
   };
-  const firstLine = (t, skip) => {
-    for (const line of String(t || '').split(/[\\n\\t]/)) {
-      const s = clean(line);
-      if (s && s !== skip && /[\\p{L}\\p{N}]/u.test(s)) return s.slice(0, 50);
-    }
-    return '';
-  };
-  const rowOf = e => {
-    const row = e.closest('tr,[role="row"],li,[role="listitem"],[role="option"],article');
-    if (row) return firstLine(row.innerText);
-    let n = e.parentElement;
-    for (let i = 0; n && n !== document.body && i < 5; i++, n = n.parentElement) {
-      const t = n.innerText || '';
-      if (t.length > 300) break;  // reached a container, not a row
-      const s = firstLine(t);
-      if (s) return s;
-    }
-    return '';
-  };
+""" + _ROW_HELPERS_JS + """
   const out = {};
   for (const id of ids) {
     const e = c.nodes.get(id);
@@ -301,6 +323,36 @@ def _enrich_blank_labels(actions: list, node_key: str, evaluate) -> int:
         label = found.get(str(a[node_key]))
         if isinstance(label, str) and label.strip() and not _blank_label({**a, "label": label}):
             a["raw_label"], a["label"], a["synth_label"] = a.get("label", ""), label.strip()[:80], True
+            count += 1
+    return count
+
+
+def _disambiguate_duplicates(actions: list, node_key: str, evaluate) -> int:
+    """Same-named controls (one "Domain Options" kebab per card, one "Open" per row) are told
+    apart by the row or card they sit in: "Domain Options — <the card's first line>". Jev sees
+    labels only, so without this a goal naming a card could only pick one of them at random
+    (seen: Jev clicked the card's text instead of its menu). The original stays in raw_label.
+    The guards still match: a label keeps its own words first. Never raises."""
+    groups: dict = {}
+    for a in actions:
+        if a.get("kind") in ("click", "fill") and isinstance(a.get(node_key), int) \
+                and not a.get("synth_label") and (a.get("label") or "").strip():
+            groups.setdefault((a.get("kind"), a["label"]), []).append(a)
+    dups = [a for g in groups.values() if len(g) > 1 for a in g]
+    if not dups:
+        return 0
+    try:
+        found = evaluate(f"{_ROW_CONTEXT_FN}({json.dumps(sorted({a[node_key] for a in dups}))})")
+    except Exception:
+        return 0  # never let labelling break a normal observe
+    if not isinstance(found, dict):
+        return 0
+    count = 0
+    for a in dups:
+        row = found.get(str(a[node_key]))
+        if isinstance(row, str) and row.strip() and row.strip().lower() != a["label"].strip().lower():
+            a["raw_label"], a["label"] = a["label"], f"{a['label']} — {row.strip()}"[:80]
+            a["row_label"] = True
             count += 1
     return count
 
@@ -817,6 +869,7 @@ class ChromeTarget:
             except Exception:
                 pass  # never let discovery break a normal observe
         n = _enrich_blank_labels(page.get("actions", []), "node", self.browser.evaluate)
+        _disambiguate_duplicates(page.get("actions", []), "node", self.browser.evaluate)
         self._drop_unnamed_icons(page.get("actions", []))
         if n and os.environ.get("JEV_DEBUG_IFRAME"):
             _log.info("labels: synthesized %d top-frame label(s)", n)
@@ -909,6 +962,7 @@ class ChromeTarget:
                 except Exception:
                     pass
             synth = _enrich_blank_labels(raw, "node", lambda expr: self._frame_eval(session_id, expr))
+            _disambiguate_duplicates(raw, "node", lambda expr: self._frame_eval(session_id, expr))
             self._drop_unnamed_icons(raw)
             if debug and synth:
                 _log.info("iframe[%d] synthesized %d label(s)", idx, synth)
@@ -940,7 +994,7 @@ class ChromeTarget:
                           "label": a.get("label", ""), "role": a.get("role", ""),
                           "value": a.get("value", ""), "frame": idx}
                 for key in ("checked", "selected", "expanded", "synth_label", "raw_label",
-                            "file_input", "multiple"):
+                            "row_label", "file_input", "multiple"):
                     if key in a:
                         merged[key] = a[key]
                 actions.append(merged)

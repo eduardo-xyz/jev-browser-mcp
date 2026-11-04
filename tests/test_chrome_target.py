@@ -1124,3 +1124,62 @@ def test_iframe_text_is_merged_for_the_model_and_its_panels_wheeled_in_the_frame
     t.act(sc, page)
     assert ("Input.dispatchMouseEvent",
             {"type": "mouseWheel", "x": 324, "y": 200, "deltaX": 0, "deltaY": 560}) in b.calls
+
+
+# --- same-named controls are told apart by their row ------------------------------------------
+
+def test_same_named_controls_are_labelled_with_their_row():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    def ev(expr):
+        if expr.startswith(chrome_mod._ROW_CONTEXT_FN):
+            assert expr.endswith("([1, 2])")  # only the duplicates are looked up
+            return {"1": "first.example.net", "2": "second.example.net"}
+        return []
+    b.evaluate = ev
+    b.observe = lambda screenshot=False: {"url": "u", "text": "", "actions": [
+        {"id": "e1", "node": 1, "kind": "click", "label": "Domain Options", "role": "button"},
+        {"id": "e2", "node": 2, "kind": "click", "label": "Domain Options", "role": "button"},
+        {"id": "e3", "node": 3, "kind": "click", "label": "Add Domain", "role": "button"}]}
+    acts = {a["id"]: a for a in t.observe()["actions"]}
+    assert acts["e1"]["label"] == "Domain Options — first.example.net"
+    assert acts["e2"]["label"] == "Domain Options — second.example.net"
+    assert acts["e1"]["raw_label"] == "Domain Options" and acts["e1"]["row_label"] is True
+    assert acts["e3"]["label"] == "Add Domain" and "row_label" not in acts["e3"]
+    # the guards keep matching: the control's own words still come first
+    from jev_runner.guards import _label_matches, normalize
+    assert _label_matches(normalize("Send — Ana López"), ["Send"]) is True
+
+
+def test_same_named_controls_inside_an_iframe_are_labelled_too(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: []
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
+        {"id": "e1", "node": 4, "kind": "click", "label": "Domain Options", "role": "button"},
+        {"id": "e2", "node": 5, "kind": "click", "label": "Domain Options", "role": "button"}]})
+    def frame_eval(sid, expr):
+        if expr.startswith(chrome_mod._ROW_CONTEXT_FN):
+            return {"4": "first.example.net", "5": "second.example.net"}
+        return []
+    monkeypatch.setattr(t, "_frame_eval", frame_eval)
+    acts = {a["id"]: a for a in t.observe()["actions"] if a.get("frame")}
+    assert acts["f1e1"]["label"] == "Domain Options — first.example.net" and acts["f1e1"]["row_label"]
+    assert acts["f1e2"]["label"] == "Domain Options — second.example.net"
+
+
+def test_row_lookup_failure_leaves_labels_alone():
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    def ev(expr):
+        if expr.startswith(chrome_mod._ROW_CONTEXT_FN):
+            raise RuntimeError("boom")
+        return []
+    b.evaluate = ev
+    b.observe = lambda screenshot=False: {"url": "u", "text": "", "actions": [
+        {"id": "e1", "node": 1, "kind": "click", "label": "Open", "role": "link"},
+        {"id": "e2", "node": 2, "kind": "click", "label": "Open", "role": "link"}]}
+    assert [a["label"] for a in t.observe()["actions"]] == ["Open", "Open"]

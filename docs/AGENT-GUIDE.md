@@ -62,7 +62,8 @@ there would land on the covering element. Pages built from web components (shado
 their shadow roots, and their controls are clicked there too. Panels that scroll inside the page (a
 log or table in its own scroll box while the window never moves) get `Scroll the list down/up` actions,
 so rows below the fold are reachable without a date picker or a search. The text of a cross-origin
-iframe is part of what Jev and the verifier read, not only of `read()`. A click is refused as stale only
+iframe is part of what Jev and the verifier read, not only of `read()`. Same-named controls (one `Domain Options` per card, one `Open` per row) are told apart by their row:
+`Domain Options — <the card's first line>`, so name the row or card in the goal. A click is refused as stale only
 when its own control or the document changed, not when the page scrolled or another field ticked.
 A page whose observe comes back with empty `text` after it has settled really
 shows nothing in the viewport (one such GHL route renders only a single-button overlay): check the URL
