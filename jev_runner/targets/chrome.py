@@ -477,8 +477,12 @@ _SCROLLERS_JS = """(() => {
     if (hit !== e) continue;  // covered, or a panel nested there would take the wheel instead
     const id = base + out.length;
     c.nodes.set(id, e);
+    const cls = (typeof e.className === 'string' ? e.className : '').split(/\\s+/)
+      .filter(k => k.length >= 4 && !/\\d/.test(k) && !/^(flex|grid|relative|absolute|overflow|block|inline|hidden|w-full|h-full)/.test(k))
+      .slice(0, 3).join(' ').replace(/[-_]+/g, ' ');
     out.push({node: id, down: e.scrollTop + e.clientHeight < e.scrollHeight - 2, up: e.scrollTop > 0,
-              head: firstLine(e.innerText).slice(0, 30)});  // the panel's first line names it
+              name: clean(e.getAttribute('aria-label') || cls).slice(0, 40),  // what the app calls it
+              head: firstLine(e.innerText).slice(0, 30)});  // and its first line
   }
   return out;
 })()"""
@@ -608,7 +612,10 @@ def _scroller_actions(found, prefix: str = "sc") -> list:
         if not isinstance(f, dict) or not isinstance(f.get("node"), int):
             continue
         head = f.get("head") if isinstance(f.get("head"), str) else ""
-        what = f"the list — {head.strip()}" if head.strip() else f"the list{f' {i + 1}' if i else ''}"
+        name = f.get("name") if isinstance(f.get("name"), str) else ""
+        what = f"the {name.strip()}" if name.strip() else f"the list{f' {i + 1}' if i else ''}"
+        if head.strip():
+            what += f" — {head.strip()}"
         for way, delta in (("down", 560), ("up", -560)):
             if f.get(way):
                 out.append({"id": f"{prefix}{i + 1}{way[0]}", "kind": "scroll", "node": f["node"],

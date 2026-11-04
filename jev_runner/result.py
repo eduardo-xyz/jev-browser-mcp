@@ -34,8 +34,9 @@ def build(runner) -> dict:
             out["hint"] = HINTS[runner.reason]
     if runner.reason == "stale_page" and getattr(runner, "last_stale", None):
         out["detail"] = runner.last_stale  # which action was refused and why (for bug reports)
-    if runner.reason == "jev_blocked" and getattr(runner, "last_blocked", None):
-        out["detail"] = runner.last_blocked  # what Jev saw when it gave up (for bug reports)
+    if (runner.reason == "jev_blocked" or runner.status == "unverified") \
+            and getattr(runner, "last_blocked", None):
+        out["detail"] = runner.last_blocked  # what Jev saw when it gave up or called done
     for key in ("field", "expected", "seen", "control"):
         if runner.pending and key in runner.pending:
             out[key] = runner.pending[key]

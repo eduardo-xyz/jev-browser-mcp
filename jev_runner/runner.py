@@ -738,6 +738,7 @@ class Runner:
             if self.executed_money and self.receipt is None:
                 self._save_receipt(page)
             if self._check(page) is False:
+                self.last_blocked = self._blocked_detail(decision, page)  # what Jev called done
                 raise _Stop("unverified", self._verify_reason or "goal_not_visible")
             raise _Stop("done")
         if choice == "BLOCKED":

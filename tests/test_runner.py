@@ -512,3 +512,12 @@ def test_blocked_with_nothing_to_click_says_no_controls(cfg):
     out = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["BLOCKED"])).run()
     assert out["detail"]["why"] == "no_controls" and out["detail"]["controls"] == {}
     assert out["detail"]["weighed"] == {}
+
+
+def test_unverified_result_says_what_jev_called_done(cfg, monkeypatch):
+    t = FakeTarget([page(click("n1", "Status: Pending"), url="https://a/b", text="ticket")])
+    r = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["DONE"]))
+    monkeypatch.setattr(r, "_check", lambda page: False)
+    out = r.run()
+    assert out["status"] == "unverified"
+    assert out["detail"]["sample"] == ["Status: Pending"] and out["detail"]["controls"] == {"click": 1}

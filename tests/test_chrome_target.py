@@ -1061,11 +1061,12 @@ def _scroller_target(found):
 
 
 def test_panels_that_scroll_inside_the_page_are_offered_and_wheeled_over():
-    t, b = _scroller_target([{"node": 6000000, "down": True, "up": False, "head": "Properties"},
+    t, b = _scroller_target([{"node": 6000000, "down": True, "up": False, "head": "Pending",
+                              "name": "ticket properties wrapper"},
                              {"node": 6000001, "down": True, "up": True}])
     page = t.observe()
     sc = [(a["id"], a["label"], a["delta"]) for a in page["actions"] if a.get("scroller")]
-    assert sc == [("sc1d", "Scroll the list — Properties down", 560),
+    assert sc == [("sc1d", "Scroll the ticket properties wrapper — Pending down", 560),
                   ("sc2d", "Scroll the list 2 down", 560), ("sc2u", "Scroll the list 2 up", -560)]
     t.act(next(a for a in page["actions"] if a["id"] == "sc2u"), page)
     assert b.acts == []  # not upstream's wheel over the window
