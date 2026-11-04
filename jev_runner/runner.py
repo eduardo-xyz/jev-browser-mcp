@@ -118,6 +118,12 @@ class _Stop(Exception):
         self.status, self.reason = status, reason
 
 
+# Messages of a lost link to the driven browser or device (websocket closed, port refused).
+_CONNECTION_LOST = re.compile(
+    r"no close frame|connection (?:refused|reset|closed|lost|aborted)|ECONNREFUSED|ECONNRESET|"
+    r"remote (?:host|end) closed|not connected to|broken pipe", re.I)
+
+
 class Runner:
     settle_delay = 0.4  # seconds between reads when checking a paused screen holds still
 
@@ -171,6 +177,7 @@ class Runner:
         self._signin_reloaded = False  # one reload of the start URL per run on a sign-in bounce
         self.last_stale: dict | None = None  # why the last action was refused as stale (result detail)
         self.last_blocked: dict | None = None  # what Jev was looking at when it gave up (result detail)
+        self.last_error: dict | None = None  # the raw error behind target_unreachable (result detail)
         self._load_waited = 0.0  # seconds spent waiting on a loading page without asking Jev
         self._load_clear = LOAD_CLEAR_READS  # clear reads since the last loading one (none seen yet)
         self._obs_log: list[tuple[str, str]] = []  # recent (where, text): a field can scroll off
@@ -228,7 +235,13 @@ class Runner:
                 self.status, self.reason = "done", "verified_after_stale"
         except Exception as e:  # provider/target failures end the run, never escape
             msg = scrub({"text": str(e) or type(e).__name__}, self.secrets)["text"]
-            self.status, self.reason = "error", msg[:200]
+            if _CONNECTION_LOST.search(msg):
+                # The driven browser or device dropped the link mid-run (Chrome closed, restarted,
+                # or started without its debugging port): a plain name beats a websocket message.
+                self.status, self.reason = "error", "target_unreachable"
+                self.last_error = {"error": msg[:160]}
+            else:
+                self.status, self.reason = "error", msg[:200]
         finally:
             self._touch()
         _log.info("session=%s status=%s steps=%d model_calls=%d elapsed_ms=%d timing=%s",
@@ -490,7 +503,11 @@ class Runner:
             detail["covered"] = page["covered"]
         if self._load_waited:
             detail["waited_loading_ms"] = round(self._load_waited * 1000)
-        if not controls:
+        if detail["text_chars"] == 0 and sum(controls.values()) <= 2:
+            # Nothing rendered at all (an injected widget or two at most): the app showed an empty
+            # shell, usually because the URL names a route it does not know.
+            detail["why"] = "blank_page"
+        elif not controls:
             detail["why"] = "no_controls"
         return detail
 

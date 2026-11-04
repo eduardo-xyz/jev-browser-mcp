@@ -15,6 +15,9 @@ HINTS = {
                    "the run itself sign in, say so in the goal. If the signed-in Chrome is not the one "
                    "jevd drives, check `status` -> chrome.cdp_url: the binding comes from config.toml "
                    "(chrome_cdp_url, chrome_label) in jevd's data dir."),
+    "target_unreachable": ("The driven browser or device dropped the connection mid-run (Chrome closed or "
+                           "restarted, or is running without its remote-debugging port). Check `status` -> "
+                           "chrome.cdp_url, make sure that Chrome is up, then run again."),
 }
 
 
@@ -32,6 +35,8 @@ def build(runner) -> dict:
         out["reason"] = runner.reason
         if runner.reason in HINTS:
             out["hint"] = HINTS[runner.reason]
+    if runner.reason == "target_unreachable" and getattr(runner, "last_error", None):
+        out["detail"] = runner.last_error  # the raw connection error, for bug reports
     if runner.reason == "stale_page" and getattr(runner, "last_stale", None):
         out["detail"] = runner.last_stale  # which action was refused and why (for bug reports)
     if (runner.reason == "jev_blocked" or runner.status == "unverified") \

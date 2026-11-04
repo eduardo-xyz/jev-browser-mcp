@@ -514,6 +514,42 @@ def test_blocked_with_nothing_to_click_says_no_controls(cfg):
     assert out["detail"]["weighed"] == {}
 
 
+def test_blocked_on_a_page_that_rendered_nothing_says_blank_page(cfg):
+    # an app's unknown route: no text at all, only an injected widget button (seen on a workflow
+    # URL with the wrong path segment: a blank shell for the whole loading wait)
+    t = FakeTarget([page(click("w1", "Open DAOS widget"), url="https://a/x/wrong/1", text="")])
+    out = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["BLOCKED"])).run()
+    assert out["detail"]["why"] == "blank_page"
+    assert out["detail"]["text_chars"] == 0 and out["detail"]["controls"] == {"click": 1}
+
+
+def test_blocked_with_no_text_but_real_controls_is_not_blank(cfg):
+    actions = [click(f"n{i}", f"Button {i}") for i in range(3)]
+    t = FakeTarget([page(*actions, url="https://a/b", text="")])
+    out = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["BLOCKED"])).run()
+    assert "why" not in out["detail"]
+
+
+def test_lost_browser_link_is_reported_as_target_unreachable(cfg):
+    class Dropped(FakeTarget):
+        def observe(self):
+            raise RuntimeError("no close frame received or sent")
+
+    out = Runner("s1", Dropped([page()]), "x", None, cfg, choose=scripted_choose([])).run()
+    assert (out["status"], out["reason"]) == ("error", "target_unreachable")
+    assert out["detail"] == {"error": "no close frame received or sent"}
+    assert "remote-debugging port" in out["hint"]
+
+
+def test_other_target_errors_keep_their_message(cfg):
+    class Broken(FakeTarget):
+        def observe(self):
+            raise RuntimeError("HTTP 529 overloaded")
+
+    out = Runner("s1", Broken([page()]), "x", None, cfg, choose=scripted_choose([])).run()
+    assert (out["status"], out["reason"]) == ("error", "HTTP 529 overloaded") and "detail" not in out
+
+
 def test_unverified_result_says_what_jev_called_done(cfg, monkeypatch):
     t = FakeTarget([page(click("n1", "Status: Pending"), url="https://a/b", text="ticket")])
     r = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["DONE"]))
