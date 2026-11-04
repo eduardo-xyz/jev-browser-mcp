@@ -1183,3 +1183,28 @@ def test_row_lookup_failure_leaves_labels_alone():
         {"id": "e1", "node": 1, "kind": "click", "label": "Open", "role": "link"},
         {"id": "e2", "node": 2, "kind": "click", "label": "Open", "role": "link"}]}
     assert [a["label"] for a in t.observe()["actions"]] == ["Open", "Open"]
+
+
+# --- an iframe's own loaders, and text still changing, hold the run --------------------------
+
+def test_iframe_loaders_and_changing_text_flag_the_page_as_loading(monkeypatch):
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: {"covered": [], "loading": False} if "loadingSel" in expr else []
+    b.observe = lambda screenshot=False: {"url": "u", "text": "Nav", "actions": []}
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    state = {"text": "Loading", "loading": True}
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [], "text": state["text"]})
+    monkeypatch.setattr(t, "_frame_eval",
+                        lambda sid, expr: state["loading"] if "a spinner or skeleton" in expr else [])
+    assert t.observe()["loading"] is True  # a skeleton inside the frame
+    state.update(text="Rows 1-10", loading=False)
+    assert t.observe()["loading"] is True  # the text just changed: still settling
+    chrome_mod._sleep(2.0)
+    assert t.observe()["loading"] is False  # held still: loaded
+    state["text"] = "Rows 1-20"
+    assert t.observe()["loading"] is True  # it grew again
+    chrome_mod._sleep(2.0)
+    state["loading"] = True
+    assert t.observe()["loading"] is True  # a spinner came back

@@ -690,6 +690,8 @@ _RESOLVE_SHADOW_FN = """((action) => {
 # Seen: a panel opened by a mis-labelled icon covered a search field; Jev tried to fill it three times
 # and the run died as stale_page. And a contact page shows loaders for ~9 s while its text is only the
 # navigation shell; Jev answered BLOCKED after one wait.
+# Only indicators with some area count (>= 400 px²): a 14 px "loading"-styled input decoration that
+# never goes away held a run for the whole 20 s patience (seen on an audit log page).
 _LOADING_SELECTOR = ("[aria-busy='true'],[role='progressbar'],[class*='skeleton'],[class*='spinner'],"
                      "[class*='loader'],[class*='loading']")
 _POST_OBSERVE_FN = """((nodes, loadingSel) => {
@@ -704,10 +706,32 @@ _POST_OBSERVE_FN = """((nodes, loadingSel) => {
   }
   let loading = document.readyState !== 'complete';
   if (!loading) for (const e of document.querySelectorAll(loadingSel)) {
-    try { if (e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) { loading = true; break; } } catch (_) {}
+    try {
+      if (!e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) continue;
+      const r = e.getBoundingClientRect();
+      if (r.width * r.height >= 400) { loading = true; break; }  // a spinner or skeleton, not a decoration
+    } catch (_) {}
   }
   return {covered, loading};
 })"""
+
+
+# A cross-origin iframe's own loaders. The top frame's check cannot see inside an OOPIF, so a
+# white-labelled screen whose canvas was still a skeleton looked loaded (seen: Jev judged a
+# workflow editor at 5 s, on 20 of its 77 controls, and said BLOCKED). Only indicators with some
+# area count: a 14 px "loading"-styled input decoration that never goes away must not hold a run.
+_FRAME_LOADING_FN = """((loadingSel) => {
+  if (document.readyState !== 'complete') return true;
+  for (const e of document.querySelectorAll(loadingSel)) {
+    try {
+      if (!e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) continue;
+      const r = e.getBoundingClientRect();
+      if (r.width * r.height >= 400) return true;  // a spinner or skeleton, not a decoration
+    } catch (_) {}
+  }
+  return false;
+})"""
+FRAME_SETTLE = 1.0  # s a frame's text must hold still before the frame counts as loaded
 
 
 _NEW_TAB_GRACE = 0.3  # s after a click for a window.open to register as a target
@@ -786,6 +810,7 @@ class ChromeTarget:
         self.url = url
         self.browser = self._open(url)
         self._files: list[str] = []  # local paths this run may upload (set by the daemon)
+        self._frame_seen: dict = {}  # frame origin -> (text digest, when it last changed)
         self._next_file = 0
         # Register this tab with AI Broker so the Tab Groups extension names+colours it (best-effort;
         # a no-op without a broker token, and a failure never affects the run).
@@ -875,6 +900,8 @@ class ChromeTarget:
             _log.info("labels: synthesized %d top-frame label(s)", n)
         self._merge_iframe_actions(page)
         self._drop_covered_and_flag_loading(page)
+        if page.get("frame_loading"):
+            page["loading"] = True  # an iframe still shows loaders, or its text is still changing
         page["readable"] = True
         if self._grouping and _monotonic() - self._last_tab_ping > _TAB_ACTIVITY_EVERY:
             self._last_tab_ping = _monotonic()  # keep the claimed tab alive past the broker's sweep
@@ -930,6 +957,8 @@ class ChromeTarget:
                 continue
             self._frames[idx] = {"session": session_id, "origin": _origin(url)}
             frame_text = snap.get("text") if isinstance(snap.get("text"), str) else ""
+            if self._frame_still_loading(session_id, _origin(url) or url, frame_text):
+                page["frame_loading"] = True
             if frame_text.strip():
                 # Jev (and the verifier) decide on page["text"], which innerText stops at the
                 # iframe boundary: without this a white-labelled screen looked empty to Jev even
@@ -1014,6 +1043,22 @@ class ChromeTarget:
                 sort_keys=True) + (page.get("text") or "")
             page["fingerprint"] = hashlib.sha256(
                 (str(page.get("fingerprint", "")) + frame_sig).encode()).hexdigest()
+
+    def _frame_still_loading(self, session_id, key: str, text: str) -> bool:
+        """Loaders visible inside the frame, or its text changed within the last FRAME_SETTLE s
+        (a canvas or table that is still filling in shows no loader at all)."""
+        try:
+            loading = bool(self._frame_eval(
+                session_id, f"{_FRAME_LOADING_FN}({json.dumps(_LOADING_SELECTOR)})"))
+        except Exception:
+            loading = False
+        now = _monotonic()
+        seen = self._frame_seen.get(key)
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        if seen is None or seen[0] != digest:
+            self._frame_seen[key] = (digest, now)
+            return True
+        return loading or now - seen[1] < FRAME_SETTLE
 
     def _frame_snapshot(self, session_id) -> dict | None:
         from jev_ultrafast.browser import READ_STATE
