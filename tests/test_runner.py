@@ -663,6 +663,13 @@ def test_a_quoted_label_not_on_screen_or_ambiguous_leaves_the_choice_to_the_mode
     assert t.acted == [] and calls == [1, 1]                # not on screen: the model decides
 
 
+def test_no_progress_carries_the_screen_and_what_was_tried(cfg):
+    t = FakeTarget([page(click("n1", "Next"), url="https://a/b", text="x" * 50)] * 10, stuck_ids={"n1"})
+    out = Runner("s1", t, "x", None, cfg, choose=scripted_choose(["n1"] * 10)).run()
+    assert out["reason"] == "no_progress"
+    assert out["detail"]["sample"] == ["Next"] and out["detail"]["tried"][-1] == "Next"
+
+
 def test_blocked_detail_lists_the_canvas_node_titles(cfg):
     bring = [{"id": f"bv{i}", "kind": "scroll", "node": 8000000 + i, "pan_to": True,
               "label": f"Bring {t} into view"} for i, t in enumerate(["WAIT", "Remove Tag", "END"])]

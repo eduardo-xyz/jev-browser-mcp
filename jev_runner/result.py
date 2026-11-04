@@ -39,7 +39,7 @@ def build(runner) -> dict:
         out["detail"] = runner.last_error  # the raw connection error, for bug reports
     if runner.reason == "stale_page" and getattr(runner, "last_stale", None):
         out["detail"] = runner.last_stale  # which action was refused and why (for bug reports)
-    if (runner.reason == "jev_blocked" or runner.status == "unverified") \
+    if (runner.reason in ("jev_blocked", "no_progress") or runner.status == "unverified") \
             and getattr(runner, "last_blocked", None):
         out["detail"] = runner.last_blocked  # what Jev saw when it gave up or called done
     for key in ("field", "expected", "seen", "control"):

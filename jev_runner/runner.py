@@ -506,6 +506,9 @@ class Runner:
         if len(self.history) >= self.max_steps:
             raise _Stop("max_steps")
         if self._no_progress():
+            # the same screen after the last few actions: say what was on it and what was tried
+            self.last_blocked = self._blocked_detail({}, self.page or {})
+            self.last_blocked["tried"] = [h.get("action") for h in self.history[-NO_PROGRESS:]]
             raise _Stop("blocked", "no_progress")
         page = self._observe()
         if self._still_loading(page):

@@ -58,14 +58,17 @@ def run_goal(g: dict, call=None) -> dict:
     call = call or client.call
     started = time.perf_counter()
     out = {"name": g["name"], "url": g["url"], "passed": False, "status": None, "reason": None,
-           "why": None, "model_calls": None, "elapsed_ms": None, "expect": g.get("expect"), "found": None}
+           "why": None, "model_calls": None, "elapsed_ms": None, "expect": g.get("expect"), "found": None,
+           "last_actions": [], "tried": None}
     sid = None
     try:
         r = call("run_task", {"target": "chrome", "url_or_app": g["url"], "goal": g["goal"],
                               "max_steps": int(g.get("max_steps") or 8)})
         sid = r.get("session_id")
+        detail = r.get("detail") if isinstance(r.get("detail"), dict) else {}
         out.update(status=r.get("status"), reason=r.get("reason"), model_calls=r.get("model_calls"),
-                   why=(r.get("detail") or {}).get("why") if isinstance(r.get("detail"), dict) else None)
+                   why=detail.get("why"), tried=detail.get("tried"),
+                   last_actions=list(r.get("last_actions") or []))
         text = ""
         if sid:
             rd = call("read", {"session_id": sid})
@@ -115,6 +118,10 @@ def report(results: list[dict], when: _dt.datetime) -> str:
         if r["found"] is False:
             reason += f" expected '{r['expect']}'"
         lines.append(f"| {r['name']} | {verdict} | {r['status']} | {reason} | {r['model_calls']} | {r['elapsed_ms']} |")
+    failed = [r for r in results if not r["passed"]]
+    if failed:
+        lines += ["", "Failed runs, last actions:"]
+        lines += [f"- {r['name']}: {' | '.join(r.get('last_actions') or []) or '(none)'}" for r in failed]
     lines += ["", "URLs:", *[f"- {r['name']}: {r['url']}" for r in results], ""]
     return "\n".join(lines)
 

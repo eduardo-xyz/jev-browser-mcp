@@ -73,6 +73,8 @@ def test_summary_and_report_name_the_failures():
     text = smoke.report(results, when)
     assert "| wf | PASS | done |" in text and "| editor | FAIL | blocked | jev_blocked (blank_page) |" in text
     assert "- emails: u3" in text
+    results[1]["last_actions"] = ["click · Next", "click · Next"]
+    assert "- editor: click · Next | click · Next" in smoke.report(results, when)
 
 
 def test_post_uses_the_configured_command_and_room(monkeypatch):
