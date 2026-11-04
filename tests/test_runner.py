@@ -504,7 +504,7 @@ def test_blocked_result_says_what_jev_saw(cfg):
     out = Runner("s1", t, "x", None, cfg, choose=choose).run()
     assert out["status"] == "blocked" and out["reason"] == "jev_blocked"
     assert out["detail"] == {"url": "https://a/b", "text_chars": 15, "controls": {"click": 1},
-                             "weighed": {"BLOCKED": 0.7, "CLICK": 0.3}}
+                             "weighed": {"BLOCKED": 0.7, "CLICK": 0.3}, "sample": ["Save"]}
 
 
 def test_blocked_with_nothing_to_click_says_no_controls(cfg):

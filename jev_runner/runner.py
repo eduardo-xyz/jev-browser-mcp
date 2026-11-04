@@ -478,6 +478,9 @@ class Runner:
         in_frames = sum(1 for a in actions if a.get("frame"))
         if in_frames:
             detail["in_iframes"] = in_frames
+        # what was on offer, so a report can say whether the goal's control was there at all
+        detail["sample"] = [(a.get("label") or "")[:40] for a in actions
+                            if a.get("kind") not in ("wait", "scroll")][:15]
         if page.get("covered"):
             detail["covered"] = page["covered"]
         if self._load_waited:
