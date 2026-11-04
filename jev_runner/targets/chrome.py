@@ -673,7 +673,7 @@ _OFFSCREEN_JS = """(() => {
     const canvas = base + 900000 + k++;
     c.nodes.set(canvas, cv);
     for (const e of cv.querySelectorAll(CONTROL)) {
-      if (out.length >= 80) break;
+      if (out.length >= 300) break;  // the runner keeps 12 for the model; a quoted title must be findable
       if (!(e instanceof HTMLElement) || !vis(e)) continue;
       const outer = e.parentElement && e.parentElement.closest(CONTROL);
       if (outer && cv.contains(outer)) continue;  // a control inside a node card: the card is the destination
@@ -681,7 +681,9 @@ _OFFSCREEN_JS = """(() => {
       if (!r.width || !r.height) continue;
       const inside = r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
       if (inside) continue;
-      const label = clean(e.getAttribute('aria-label') || (e.innerText || '').split('\\n')[0]).slice(0, 40);
+      // the card's title: its first line with a word in it (a step-number badge may come first)
+      const lines = (e.innerText || '').split('\\n').map(clean).filter(Boolean);
+      const label = clean(e.getAttribute('aria-label') || lines.find(l => /[A-Za-z]{2,}/.test(l)) || lines[0] || '').slice(0, 40);
       if (!label || seen.has(label)) continue;
       seen.add(label);
       const id = base + out.length;
