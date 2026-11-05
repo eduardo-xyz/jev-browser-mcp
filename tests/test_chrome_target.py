@@ -461,7 +461,7 @@ def test_merged_iframe_node_does_not_collide_with_top_frame(monkeypatch):
     monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
         {"id": "e5", "node": 5, "kind": "click", "label": "Iframe row"}]})
     page = t.observe()
-    nodes = [a["node"] for a in page["actions"]]
+    nodes = [a["node"] for a in page["actions"] if a.get("kind") != "key"]
     assert len(nodes) == len(set(nodes))  # no collision between top node 5 and iframe node 5
     iframe_a = next(a for a in page["actions"] if a.get("frame"))
     assert iframe_a["node"] != 5 and iframe_a["frame_node"] == 5
@@ -959,7 +959,7 @@ def test_covered_controls_are_dropped_from_the_actions():
             {"id": "e2", "node": 2, "kind": "click", "label": "Close", "role": "button"},
             {"id": "wait", "kind": "wait", "label": "Wait"}]
     page = _observe_with({"covered": [1], "loading": False}, acts)
-    assert [a["id"] for a in page["actions"]] == ["e2", "wait"] and page["covered"] == 1
+    assert [a["id"] for a in page["actions"] if a.get("kind") != "key"] == ["e2", "wait"] and page["covered"] == 1
     assert page["loading"] is False
 
 
@@ -967,7 +967,7 @@ def test_loading_flag_and_tolerance_of_a_failed_probe():
     acts = [{"id": "e1", "node": 1, "kind": "click", "label": "X", "role": "button"}]
     assert _observe_with({"covered": [], "loading": True}, acts)["loading"] is True
     page = _observe_with("not a dict", acts)  # probe failed: nothing dropped, no flag
-    assert [a["id"] for a in page["actions"]] == ["e1"] and "loading" not in page
+    assert [a["id"] for a in page["actions"] if a.get("kind") != "key"] == ["e1"] and "loading" not in page
 
 
 # --- a click that opens a new tab is followed ------------------------------------------------
@@ -1218,7 +1218,7 @@ def test_scroller_discovery_failure_never_breaks_observe():
             raise RuntimeError("boom")
         return []
     f.browsers[0].evaluate = ev
-    assert [a["id"] for a in t.observe()["actions"]] == []
+    assert [a["id"] for a in t.observe()["actions"] if a.get("kind") != "key"] == []
 
 
 # --- an iframe's text reaches Jev, and its panels scroll in place --------------------------------
@@ -1311,7 +1311,7 @@ def test_row_lookup_failure_leaves_labels_alone():
     b.observe = lambda screenshot=False: {"url": "u", "text": "", "actions": [
         {"id": "e1", "node": 1, "kind": "click", "label": "Open", "role": "link"},
         {"id": "e2", "node": 2, "kind": "click", "label": "Open", "role": "link"}]}
-    assert [a["label"] for a in t.observe()["actions"]] == ["Open", "Open"]
+    assert [a["label"] for a in t.observe()["actions"] if a.get("kind") != "key"] == ["Open", "Open"]
 
 
 # --- an iframe's own loaders, and text still changing, hold the run --------------------------
@@ -1380,7 +1380,7 @@ def test_controls_still_identical_after_row_context_are_numbered():
         {"id": "e1", "node": 1, "kind": "click", "label": "Assign user Action", "role": "button"},
         {"id": "e2", "node": 2, "kind": "click", "label": "Assign user Action", "role": "button"},
         {"id": "e3", "node": 3, "kind": "click", "label": "Assign user Action", "role": "button"}]}
-    labels = [a["label"] for a in t.observe()["actions"]]
+    labels = [a["label"] for a in t.observe()["actions"] if a.get("kind") != "key"]
     assert labels == ["Assign user Action — Active", "Assign user Action — Active (2)",
                       "Assign user Action"]  # the third is unique once the others carry a row
 
@@ -1544,3 +1544,18 @@ def test_same_titled_cards_with_the_same_badge_are_numbered_off_screen_like_on_s
     js = chrome_mod._OFFSCREEN_JS
     assert "label = label + ' (' + n + ')'" in js and "counts[label] = (counts[label] || 0) + 1" in js
     assert "if (seen.has(label)) continue;\n    seen.add(label);\n    out.push({node: k.node" not in js
+
+
+def test_escape_is_a_runner_only_key_action_dispatched_as_a_key_event():
+    import types
+    page = {"actions": []}
+    ChromeTarget._add_key_actions(page)
+    assert page["actions"] == [{"id": "key_escape", "kind": "key", "key": "Escape", "label": "Press Escape"}]
+    calls = []
+    class T(ChromeTarget):
+        def __init__(self):
+            self.browser = types.SimpleNamespace(call=lambda method, **kw: calls.append((method, kw)),
+                                                 fresh=lambda *a: pytest.fail("no freshness check for a key"))
+    T().act(page["actions"][0], page)
+    assert [c[0] for c in calls] == ["Input.dispatchKeyEvent"] * 2
+    assert [c[1]["type"] for c in calls] == ["keyDown", "keyUp"] and calls[0][1]["key"] == "Escape"

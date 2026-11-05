@@ -1358,6 +1358,7 @@ class ChromeTarget:
         self._merge_iframe_actions(page)
         self._drop_covered_and_flag_loading(page)
         self._add_disabled(page)
+        self._add_key_actions(page)
         if page.get("frame_loading"):
             page["loading"] = True  # an iframe still shows loaders, or its text is still changing
         page["readable"] = True
@@ -1365,6 +1366,15 @@ class ChromeTarget:
             self._last_tab_ping = _monotonic()  # keep the claimed tab alive past the broker's sweep
             tab_groups.activity([self._tab])
         return page
+
+    @staticmethod
+    def _add_key_actions(page: dict) -> None:
+        """One runner-only action: pressing Escape, which closes a modal, a dropdown or a popover
+        that offers no close control of its own (seen: an issues dialog that no goal could close,
+        leaving the session stuck). The runner presses it when the goal says to; the model never
+        sees it."""
+        page.setdefault("actions", []).append(
+            {"id": "key_escape", "kind": "key", "key": "Escape", "label": "Press Escape"})
 
     def _add_disabled(self, page: dict) -> None:
         """page["disabled"]: the names of visible toggles the app has greyed out (top frame). Not
@@ -1860,6 +1870,9 @@ class ChromeTarget:
         if action.get("scroller"):
             self._act_scroller(action)  # wheel over a panel, not over the window
             return
+        if action.get("kind") == "key":
+            self._press_key(action.get("key") or "Escape")
+            return
         # Freshness is checked here, before any input; our StalePage is only ever raised from this check.
         try:
             is_fresh = self.browser.fresh(page, action)
@@ -1884,6 +1897,16 @@ class ChromeTarget:
                 raise RuntimeError(f"action_uncertain: {exc}") from exc
         if before is not None:
             self._follow_new_tab(before)
+
+    _KEYS = {"Escape": {"key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}}
+
+    def _press_key(self, key: str) -> None:
+        """A key press to the page (Escape only), down then up, no target element involved."""
+        spec = self._KEYS.get(key)
+        if spec is None:
+            raise RuntimeError(f"unsupported key {key!r}")
+        self.browser.call("Input.dispatchKeyEvent", type="keyDown", **spec)
+        self.browser.call("Input.dispatchKeyEvent", type="keyUp", **spec)
 
     def _act_scroller(self, action: dict) -> None:
         """Wheel over a panel that scrolls inside the page, resolved by node like a click: a panel

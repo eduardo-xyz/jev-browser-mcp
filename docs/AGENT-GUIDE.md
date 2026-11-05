@@ -106,6 +106,12 @@ offered as `Bring WAIT 24 hour (change this if you need) — 29 into view`, and 
 `... — 29` too, so quote the title with its badge for both the bring and the click (a short title in the click
 still resolves to the full name the goal quoted for the bring). Two cards with the same title and the same badge
 are numbered in canvas order, top to bottom: `... — 20` and `... — 20 (2)`, on screen and off.
+A control the goal rules out (`Do not click Delete or Publish`, up to the next comma or period) is never shown
+to the model. Once every click the goal quotes has happened, a model act on a control the goal does not name
+ends the run `done` with reason `named_clicks_done` and `detail.refused`; if that further step was wanted, name
+it in the goal ("then click 'Next'").
+`press Escape` in a goal is done by the runner itself (one key press, no model): the way to dismiss a modal,
+dropdown or popover that offers no close control you can name.
 A goal that says to click a quoted label `once` is honoured: after the runner's own click, a repeat of that
 label is refused and the run ends, so a toggle is never flipped back (give such a goal `max_steps` 3 or so).
 A click is refused as stale only

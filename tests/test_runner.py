@@ -851,3 +851,61 @@ def test_a_short_quoted_click_resolves_to_the_full_name_the_goal_quotes_elsewher
     t = FakeTarget([screen, screen])
     Runner("s2", t, f"Compare '{title} — 20' and '{title} — 1205', then click '{title}'.", None, cfg, choose=choose2).run()
     assert t.acted == [] and calls == [1]
+
+
+def test_a_control_the_goal_rules_out_never_reaches_the_model(cfg):
+    # seen: "Do not click Delete or Publish": the model must not even be offered them
+    seen = []
+    def choose(view, goal, history):
+        seen.append([a["label"] for a in view["actions"] if a.get("kind") == "click"])
+        return {"choice": "DONE", "operation": "DONE"}
+    screen = page(click("d", "Delete"), click("p", "Publish"), click("n", "Next"), click("s", "Save action"), text="x" * 50)
+    Runner("s1", FakeTarget([screen, screen]), "Go to the next step. Do not click Delete or Publish, and do not save.",
+           None, cfg, choose=choose).run()
+    assert seen == [["Next", "Save action"]]   # Delete, Publish gone; "do not save" rules out nothing named here
+    # the clause stops at a comma: "Do not save, click 'Save action'" keeps the quoted click
+    t = FakeTarget([screen, screen])
+    Runner("s2", t, "Do not save, click 'Save action' once.", None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted] == ["s"]
+
+
+def test_after_the_goals_named_clicks_a_model_act_on_an_unnamed_control_ends_the_run_done(cfg):
+    # seen: "Click the 'Save action' button in the Wait panel. Do not click Delete or Publish."
+    # was followed by a model click on the workflow's own Save button; an issues dialog stopped it
+    calls = []
+    def choose(view, goal, history):
+        calls.append(1)
+        return {"choice": "sw", "operation": "SW"}   # the model reaches for the workflow's Save
+    screen = page(click("sa", "Save action"), click("sw", "Save workflow button"), click("d", "Delete"), text="x" * 50)
+    t = FakeTarget([screen, screen, screen])
+    out = Runner("s1", t, "Click the 'Save action' button in the Wait panel. Do not click Delete or Publish.",
+                 None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted] == ["sa"] and calls == [1]
+    assert out["status"] in ("done", "unverified")
+    if out["status"] == "done":
+        assert out["reason"] == "named_clicks_done" and out["detail"]["refused"] == "Save workflow button"
+        assert "refused" in out["hint"]
+    # a control the goal does mention is still allowed after the named click
+    def choose2(view, goal, history):
+        return {"choice": "nx", "operation": "NX"} if len(history) < 2 else {"choice": "DONE", "operation": "DONE"}
+    screen2 = page(click("sa", "Save action"), click("nx", "Next"), text="x" * 50)
+    t = FakeTarget([screen2, screen2, screen2, screen2])
+    Runner("s2", t, "Click 'Save action', then the Next button.", None, cfg, choose=choose2).run()
+    assert [a for a, _ in t.acted] == ["sa", "nx"]
+
+
+def test_press_escape_in_the_goal_is_the_runners_own_key_press_and_the_model_never_sees_it(cfg):
+    # seen: an issues dialog with no close control the goal could name; "press Escape" was blocked
+    seen = []
+    def choose(view, goal, history):
+        seen.append([a["kind"] for a in view["actions"]])
+        return {"choice": "DONE", "operation": "DONE"}
+    key = {"id": "key_escape", "kind": "key", "key": "Escape", "label": "Press Escape"}
+    screen = {**page(click("ok", "OK"), text="x" * 50), "actions": [click("ok", "OK"), key]}
+    t = FakeTarget([screen, screen, screen])
+    out = Runner("s1", t, "Press Escape to close the dialog.", None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted] == ["key_escape"] and out["status"] in ("done", "unverified")
+    assert seen == [["click"]]            # pressed once by the runner; the model sees no key action
+    t = FakeTarget([screen, screen])
+    Runner("s2", t, "Close the dialog. Do not press Escape.", None, cfg, choose=choose).run()
+    assert t.acted == []

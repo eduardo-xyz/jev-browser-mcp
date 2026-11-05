@@ -18,6 +18,10 @@ HINTS = {
     "target_unreachable": ("The driven browser or device dropped the connection mid-run (Chrome closed or "
                            "restarted, or is running without its remote-debugging port). Check `status` -> "
                            "chrome.cdp_url, make sure that Chrome is up, then run again."),
+    "named_clicks_done": ("Every click the goal quoted has happened; the model then wanted to act on a "
+                          "control the goal does not name (`detail.refused`), which the runner refused. "
+                          "If that further step was wanted, name it in the goal; otherwise this run did "
+                          "what was asked. `read` to confirm the state."),
     "control_disabled": ("The control the goal names is on screen but the app has disabled it (greyed out, "
                          "aria-disabled): a click would do nothing. Don't retry the same click; `read` the "
                          "screen (a disabled toggle shows `(disabled)` on the States line), report what the "
@@ -43,7 +47,8 @@ def build(runner) -> dict:
         out["detail"] = runner.last_error  # the raw connection error, for bug reports
     if runner.reason == "stale_page" and getattr(runner, "last_stale", None):
         out["detail"] = runner.last_stale  # which action was refused and why (for bug reports)
-    if (runner.reason in ("jev_blocked", "no_progress", "control_disabled") or runner.status == "unverified") \
+    if (runner.reason in ("jev_blocked", "no_progress", "control_disabled", "named_clicks_done")
+            or runner.status == "unverified") \
             and getattr(runner, "last_blocked", None):
         out["detail"] = runner.last_blocked  # what Jev saw when it gave up or called done
     for key in ("field", "expected", "seen", "control"):

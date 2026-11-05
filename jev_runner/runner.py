@@ -171,8 +171,11 @@ BRING_LIMIT = 12   # "Bring <title> into view" offers kept per decision, goal-na
 _CLICK_QUOTED = re.compile(
     r"\b(?:click|open|choose|select|tap|press|pick|expand|toggle)\b(?:\s+(?:on|the|a|an|into|option|button|tab|menu|dropdown|item|node))*"
     r"\s*['\"\u201c\u2018]([^'\"\u201d\u2019]{1,60})['\"\u201d\u2019]", re.I)
-_NEGATED = re.compile(r"\b(?:not|never|don't|do not|without|avoid|skip|except|instead of)\b[^.;]*$", re.I)
+_NEGATED = re.compile(r"\b(?:not|never|don't|do not|without|avoid|skip|except|instead of)\b[^.;,]*$", re.I)  # to the next punctuation
 _QUOTED = re.compile(r"['\"\u201c\u2018]([^'\"\u201d\u2019]{2,60})['\"\u201d\u2019]")   # 'a title' or "a title" in a goal
+_PRESS_ESCAPE = re.compile(r"\bpress(?:\s+the)?\s*['\"\u201c\u2018]?(?:escape|esc)\b", re.I)  # "press Escape"
+# a clause the goal rules out ("Do not click Delete or Publish"), up to the next punctuation
+_NEG_CLAUSE = re.compile(r"\b(?:not|never|don't|do not|without|avoid|skip|except|instead of)\b([^.;,\n]*)", re.I)
 # a value the goal spells out for a field: a typing verb, then a quoted string or a bare number
 _TYPE_QUOTED = re.compile(
     r"\b(?:type|enter|write|input|put|fill(?:\s+in)?|set(?:\s+it)?|replace(?:\s+it)?|change(?:\s+it)?)\b"
@@ -593,7 +596,7 @@ class Runner:
         a page still arriving), while controls with a low BLOCKED weight mean the goal did not
         name a target Jev could match."""
         actions = page.get("actions") or []
-        controls = Counter(a.get("kind") for a in actions if a.get("kind") not in ("wait", "scroll"))
+        controls = Counter(a.get("kind") for a in actions if a.get("kind") not in ("wait", "scroll", "key"))
         probs = (decision or {}).get("operation_probabilities") or {}
         top = sorted(probs.items(), key=lambda kv: -kv[1])[:3]
         detail = {"url": page.get("url", ""), "text_chars": len(page.get("text") or ""),
@@ -603,7 +606,7 @@ class Runner:
             detail["in_iframes"] = in_frames
         # what was on offer, so a report can say whether the goal's control was there at all
         detail["sample"] = [(a.get("label") or "")[:40] for a in actions
-                            if a.get("kind") not in ("wait", "scroll")][:15]
+                            if a.get("kind") not in ("wait", "scroll", "key")][:15]
         if page.get("covered"):
             detail["covered"] = page["covered"]
         if page.get("disabled"):  # named controls the app has greyed out: not on offer by design
@@ -845,8 +848,81 @@ class Runner:
                 return names[want]
         return None
 
+    def _negated_labels(self) -> set:
+        """Control names the goal rules out: every word sequence inside a negated clause ("Do not
+        click Delete or Publish" rules out "delete" and "publish")."""
+        norm = lambda text: " ".join((text or "").split()).casefold()
+        clauses = [norm(m.group(1)) for m in _NEG_CLAUSE.finditer(self.goal or "")]
+        return {c for c in clauses if c}
+
+    def _ruled_out(self, label: str, clauses: set) -> bool:
+        want = " ".join((label or "").split()).casefold()
+        if len(want) < 3:
+            return False
+        return any(re.search(r"(?<![\w])" + re.escape(want) + r"(?![\w])", c) for c in clauses)
+
+    def _drop_ruled_out(self, view: dict) -> dict:
+        """The model never sees a control the goal rules out ("Do not click Delete or Publish"):
+        a wrong pick there is the costly kind. Seen: a goal that named its one click was followed
+        by a model click on the workflow's Save, which only an issues dialog stopped."""
+        clauses = self._negated_labels()
+        if not clauses:
+            return view
+        kept, dropped = [], []
+        for a in view.get("actions") or []:
+            if a.get("kind") in ("click", "fill", "select") and (
+                    self._ruled_out(a.get("label"), clauses) or self._ruled_out(a.get("raw_label"), clauses)):
+                dropped.append(a.get("label"))
+            else:
+                kept.append(a)
+        if dropped:
+            _log.info("session=%s %d control(s) the goal rules out kept from the model: %s",
+                      self.session_id, len(dropped), dropped[:5])
+            return {**view, "actions": kept}
+        return view
+
+    def _named_done(self, decision: dict, view: dict) -> str | None:
+        """The label of a control the model wants to act on that the goal never names, after every
+        click the goal quoted has happened: the goal's work is done and the model is reaching
+        beyond it. Seen: "Click the 'Save action' button" followed by a model click on the
+        workflow's own Save. None when the goal quotes no click, or one is still pending."""
+        goal = self.goal or ""
+        norm = lambda text: " ".join((text or "").split()).casefold()
+        quoted = set()
+        for m in _CLICK_QUOTED.finditer(goal):
+            if not _NEGATED.search(goal[max(0, m.start() - 30):m.start()]):
+                quoted.add(norm(m.group(1)))
+        if not quoted:
+            return None
+        done = {norm(h.get("action")) for h in self.history} | {norm(h.get("raw_label")) for h in self.history}
+        done |= {short for short, full in self._quoted_as.items() if full in done}
+        if not quoted <= done:
+            return None
+        act = next((a for a in view.get("actions") or [] if a.get("id") == decision.get("choice")
+                    and a.get("kind") in ("click", "fill", "select")), None)
+        if act is None:
+            return None
+        clean = norm(_NEG_CLAUSE.sub(" ", goal))  # mentions inside a ruled-out clause do not count
+        for label in (act.get("label"), act.get("raw_label")):
+            want = norm(label)
+            if want and len(want) >= 3 and re.search(r"(?<![\w])" + re.escape(want) + r"(?![\w])", clean):
+                return None  # the goal names it: allowed
+        return act.get("label") or act.get("raw_label") or act.get("id")
+
+    def _key_named(self, view: dict) -> dict | None:
+        """The Escape press when the goal says to press Escape and this run has not yet: a modal
+        that offers no close control is dismissed by the runner itself, no model involved."""
+        m = _PRESS_ESCAPE.search(self.goal or "")
+        if m is None or _NEGATED.search((self.goal or "")[max(0, m.start() - 30):m.start()]):
+            return None
+        if any(h.get("action") == "Press Escape" for h in self.history):
+            return None
+        return next((a for a in view.get("actions") or [] if a.get("kind") == "key"
+                     and a.get("key") == "Escape"), None)
+
     def _decide(self, view: dict) -> dict:
-        named = self._bring_named(view) or self._quoted_click(view)
+        view = self._drop_ruled_out(view)
+        named = self._bring_named(view) or self._quoted_click(view) or self._key_named(view)
         if named is not None:  # no model call: the goal names it outright
             _log.info("session=%s goal names the control: %s", self.session_id, named["label"])
             op = named["id"].upper()
@@ -859,6 +935,7 @@ class Runner:
             self.last_blocked = {**self._blocked_detail({}, view), "control": off, "why": "control_disabled"}
             raise _Stop("blocked", "control_disabled")
         self.model_calls += 1
+        view = {**view, "actions": [a for a in view["actions"] if a.get("kind") != "key"]}  # runner-only
         capped = cap_for_model(trim_bring_into_view(view["actions"], self.goal), self.goal,
                                text=view.get("text") or "")
         if len(capped) < len(view["actions"]):
@@ -866,6 +943,15 @@ class Runner:
                       self.session_id, len(capped), len(view["actions"]))
             view = {**view, "actions": capped}
         decision = self._timed("decide_ms", self._choose, view, self.goal, self.history)
+        beyond = self._named_done(decision, view)
+        if beyond is not None:
+            _log.info("session=%s goal's named clicks are done; refusing a further act on %r",
+                      self.session_id, beyond)
+            self.last_blocked = {**self._blocked_detail(decision, view), "refused": beyond,
+                                 "why": "named_clicks_done"}
+            decision = {"choice": "DONE", "operation": "DONE", "target": None, "confidence": 1.0,
+                        "probabilities": {"DONE": 1.0}, "operation_probabilities": {"DONE": 1.0},
+                        "shortcut": "named_done", "reason": "named_clicks_done"}
         if self._once_done(decision, view):
             _log.info("session=%s goal says once and it was clicked: done", self.session_id)
             decision = {"choice": "DONE", "operation": "DONE", "target": None, "confidence": 1.0,
@@ -1012,7 +1098,7 @@ class Runner:
             if self._check(page) is False:
                 self.last_blocked = self._blocked_detail(decision, page)  # what Jev called done
                 raise _Stop("unverified", self._verify_reason or "goal_not_visible")
-            raise _Stop("done")
+            raise _Stop("done", decision.get("reason"))
         if choice == "BLOCKED":
             if self._check(page) is True:  # Jev gave up, but the goal is visibly met
                 raise _Stop("done", "verified_after_blocked")
