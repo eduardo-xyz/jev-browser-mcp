@@ -1471,3 +1471,20 @@ def test_same_titled_canvas_cards_carry_their_badge_and_a_rows_name_is_not_the_c
     assert "k.title + ' — ' + k.badge" in js and "/^\\d{1,6}$/" in js   # badge: a number on its own line
     helpers = chrome_mod._ROW_HELPERS_JS
     assert "firstLine(row.innerText, own)" in helpers and "firstLine(t, own)" in helpers
+
+
+def test_toggles_under_a_stock_aria_label_are_named_by_role_and_row_on_screen_and_off():
+    actions = [{"id": "e1", "node": 1, "kind": "click", "role": "switch", "label": "Icon only toggle"},
+               {"id": "e2", "node": 2, "kind": "click", "role": "switch", "label": "Icon only toggle"},
+               {"id": "e3", "node": 3, "kind": "click", "role": "checkbox", "label": "Accept terms"},
+               {"id": "e4", "node": 4, "kind": "click", "role": "button", "label": "Icon only toggle"}]
+    asked = []
+    def evaluate(expr):
+        asked.append(expr)
+        return {"1": {"stock": True, "row": "Dashboard"}, "2": {"stock": True, "row": "Reporting"},
+                "3": {"stock": False, "row": "Step 2"}}
+    assert chrome_mod._name_toggles(actions, "node", evaluate) == 2
+    assert [a["label"] for a in actions] == ["switch — Dashboard", "switch — Reporting", "Accept terms", "Icon only toggle"]
+    assert actions[0]["raw_label"] == "Icon only toggle" and actions[0]["synth_label"] is True
+    assert asked[0].startswith(chrome_mod._TOGGLE_NAMES_FN) and asked[0].endswith("([1, 2, 3])")  # only toggles asked
+    assert "label = role + ' — ' + row" in chrome_mod._OFFSCREEN_JS   # the same name beyond a panel's box

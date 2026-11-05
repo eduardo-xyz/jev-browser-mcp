@@ -272,6 +272,29 @@ _ROW_CONTEXT_FN = """((ids) => {
   return out;
 })"""
 
+# For toggle nodes: is their aria-label a component's stock one (three or more toggles in the
+# document share it), and which row are they in. See _name_toggles.
+_TOGGLE_NAMES_FN = """((ids) => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes) return {};
+  const clean = s => String(s || '').replace(/\\s+/g, ' ').trim();
+  const TOG = '[role="switch"],[role="checkbox"],[role="radio"],[role="menuitemcheckbox"],[role="menuitemradio"],input[type="checkbox"],input[type="radio"]';
+  const counts = {};
+  for (const e of document.querySelectorAll(TOG)) {
+    const l = clean(e.getAttribute('aria-label'));
+    if (l) counts[l] = (counts[l] || 0) + 1;
+  }
+""" + _ROW_HELPERS_JS + """
+  const out = {};
+  for (const id of ids) {
+    const e = c.nodes.get(id);
+    if (!e || !e.isConnected) continue;
+    const l = clean(e.getAttribute('aria-label'));
+    out[id] = {stock: !!l && counts[l] >= 3, row: rowOf(e)};
+  }
+  return out;
+})"""
+
 _ICON_LABEL_FN = """((ids) => {
   const c = window.__jevFast;
   if (!c || !c.nodes) return {};
@@ -365,6 +388,31 @@ def _enrich_blank_labels(actions: list, node_key: str, evaluate) -> int:
         label = found.get(str(a[node_key]))
         if isinstance(label, str) and label.strip() and not _blank_label({**a, "label": label}):
             a["raw_label"], a["label"], a["synth_label"] = a.get("label", ""), label.strip()[:80], True
+            count += 1
+    return count
+
+
+def _name_toggles(actions: list, node_key: str, evaluate) -> int:
+    """A toggle offered under a component's stock aria-label ("Icon only toggle", shared by every
+    switch on the page) is named by its role and row instead: "switch — Dashboard", the same row
+    name read()'s States line uses. Seen: fifteen group switches all called "Icon only toggle", so
+    a goal could only quote 'Dashboard' and hit the nav item. Never raises."""
+    todo = [a for a in actions if a.get("kind") == "click" and a.get("role") in _TOGGLE_ROLES
+            and isinstance(a.get(node_key), int) and not a.get("synth_label")]
+    if not todo:
+        return 0
+    try:
+        found = evaluate(f"{_TOGGLE_NAMES_FN}({json.dumps(sorted({a[node_key] for a in todo}))})")
+    except Exception:
+        return 0  # never let naming break a normal observe
+    if not isinstance(found, dict):
+        return 0
+    count = 0
+    for a in todo:
+        info = found.get(str(a[node_key]))
+        row = (info or {}).get("row") if isinstance(info, dict) else None
+        if isinstance(row, str) and row.strip() and (info.get("stock") or _blank_label(a)):
+            a["raw_label"], a["label"], a["synth_label"] = a.get("label", ""), f"{a['role']} — {row.strip()}"[:80], True
             count += 1
     return count
 
@@ -784,7 +832,18 @@ _OFFSCREEN_JS = """(() => {
       const r = e.getBoundingClientRect();
       if (!r.width || !r.height) continue;
       if (r.left >= bx && r.top >= by && r.right <= bx2 && r.bottom <= by2) continue;
-      const label = clean(e.getAttribute('aria-label') || e.innerText || '').slice(0, 40);
+      const role = e.getAttribute('role') || '';
+      let label = clean(e.getAttribute('aria-label') || e.innerText || '').slice(0, 40);
+      if (/^(switch|checkbox|radio)$/.test(role)) {  // a toggle: its role and row, as on screen
+        const own = clean(e.innerText || '');
+        let row = '';
+        for (let n = e.parentElement, i = 0; n && n !== document.body && i < 5 && !row; i++, n = n.parentElement) {
+          const t = n.innerText || '';
+          if (t.length > 300) break;
+          row = (t.split(/[\\n\\t]/).map(clean).find(l => l && l !== own && /[A-Za-z]{2,}/.test(l) && !/^[A-Z]{1,3}$/.test(l)) || '').slice(0, 50);
+        }
+        if (row) label = role + ' — ' + row;
+      }
       if (!label || !/[A-Za-z]{2,}/.test(label) || seen.has(label)) continue;
       seen.add(label);
       const id = base + cards.length + out.length;  // past every card's id
@@ -1251,6 +1310,7 @@ class ChromeTarget:
             except Exception:
                 pass  # never let discovery break a normal observe
         n = _enrich_blank_labels(page.get("actions", []), "node", self.browser.evaluate)
+        _name_toggles(page.get("actions", []), "node", self.browser.evaluate)
         _disambiguate_duplicates(page.get("actions", []), "node", self.browser.evaluate)
         self._drop_unnamed_icons(page.get("actions", []))
         if n and os.environ.get("JEV_DEBUG_IFRAME"):
@@ -1357,6 +1417,7 @@ class ChromeTarget:
                 except Exception:
                     pass
             synth = _enrich_blank_labels(raw, "node", lambda expr: self._frame_eval(session_id, expr))
+            _name_toggles(raw, "node", lambda expr: self._frame_eval(session_id, expr))
             _disambiguate_duplicates(raw, "node", lambda expr: self._frame_eval(session_id, expr))
             self._drop_unnamed_icons(raw)
             if debug and synth:
