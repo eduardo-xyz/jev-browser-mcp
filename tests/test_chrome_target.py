@@ -1536,3 +1536,11 @@ def test_observe_lists_the_toggles_the_app_has_disabled_by_role_and_row():
     page = {"actions": []}
     ChromeTarget._add_disabled(types.SimpleNamespace(browser=types.SimpleNamespace(evaluate=lambda e: {})), page)
     assert "disabled" not in page
+
+
+def test_same_titled_cards_with_the_same_badge_are_numbered_off_screen_like_on_screen():
+    # seen: two "WAIT 24 hour" cards both counting 20 collapsed into one off-screen offer, so the
+    # second could not be named; on screen duplicates already read "... (2)"
+    js = chrome_mod._OFFSCREEN_JS
+    assert "label = label + ' (' + n + ')'" in js and "counts[label] = (counts[label] || 0) + 1" in js
+    assert "if (seen.has(label)) continue;\n    seen.add(label);\n    out.push({node: k.node" not in js

@@ -279,6 +279,7 @@ class Runner:
         self.last_blocked: dict | None = None  # what Jev was looking at when it gave up (result detail)
         self.last_error: dict | None = None  # the raw error behind target_unreachable (result detail)
         self._goal_typed: set = set()  # values spelled out in the goal that this run already typed
+        self._quoted_as: dict = {}  # a short quoted name -> the full label it was clicked under
         self._load_waited = 0.0  # seconds spent waiting on a loading page without asking Jev
         self._load_clear = LOAD_CLEAR_READS  # clear reads since the last loading one (none seen yet)
         self._obs_log: list[tuple[str, str]] = []  # recent (where, text): a field can scroll off
@@ -768,6 +769,7 @@ class Runner:
         norm = lambda text: " ".join((text or "").split()).casefold()
         done = {norm(h.get("action")) for h in self.history}
         done |= {norm(h.get("raw_label")) for h in self.history if h.get("raw_label")}
+        done |= {short for short, full in self._quoted_as.items() if full in done}
         for want in phrases:
             if want in done:
                 continue
@@ -775,6 +777,22 @@ class Runner:
                     and want in (norm(a.get("label")), norm(a.get("raw_label")))]
             if len(hits) == 1:
                 return hits[0]
+            if not hits:
+                # The goal names the control in full elsewhere ("Bring 'WAIT 24 hour — 1205' into
+                # view, then click 'WAIT 24 hour'"): on screen next to its same-titled neighbours
+                # it carries that full name, and the short one matches none of them. Seen: three
+                # such goals each opened the top card.
+                full = set()
+                for m in _QUOTED.finditer(self.goal or ""):
+                    q = norm(m.group(1))
+                    if q != want and q.startswith(want) and not _NEGATED.search(
+                            (self.goal or "")[max(0, m.start() - 30):m.start()]):
+                        full.add(q)
+                hits = [a for a in view.get("actions") or [] if a.get("kind") == "click"
+                        and norm(a.get("label")) in full]
+                if len(hits) == 1:
+                    self._quoted_as[want] = norm(hits[0].get("label"))
+                    return hits[0]
             return None  # not on screen yet, or ambiguous: the model's turn
         return None
 
@@ -788,6 +806,7 @@ class Runner:
         choice = decision.get("choice")
         norm = lambda text: " ".join((text or "").split()).casefold()
         done = {norm(h.get("action")) for h in self.history} | {norm(h.get("raw_label")) for h in self.history}
+        done |= {short for short, full in self._quoted_as.items() if full in done}
         quoted = set()
         for m in _CLICK_QUOTED.finditer(goal):
             if not _NEGATED.search(goal[max(0, m.start() - 30):m.start()]):
@@ -802,6 +821,7 @@ class Runner:
         if act is None:
             return False
         labels = {norm(act.get("label")), norm(act.get("raw_label"))} - {""}
+        labels |= {short for short, full in self._quoted_as.items() if full in labels}  # its short quoted name too
         if not (labels & quoted):
             return False
         return bool(labels & done)

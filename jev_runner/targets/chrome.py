@@ -834,9 +834,13 @@ _OFFSCREEN_JS = """(() => {
   }
   const titles = {};
   for (const k of cards) titles[k.title] = (titles[k.title] || 0) + 1;
+  // same title and same badge (two "WAIT 24 hour" cards both counting 20): numbered in canvas
+  // order, "<title> — 20 (2)", the same way the on-screen duplicates are numbered
+  const counts = {};
   for (const k of cards) {
-    const label = titles[k.title] > 1 && k.badge ? k.title + ' — ' + k.badge : k.title;
-    if (seen.has(label)) continue;
+    let label = titles[k.title] > 1 && k.badge ? k.title + ' — ' + k.badge : k.title;
+    const n = counts[label] = (counts[label] || 0) + 1;
+    if (n > 1) label = label + ' (' + n + ')';
     seen.add(label);
     out.push({node: k.node, label, canvas: k.canvas});
   }

@@ -827,3 +827,27 @@ def test_a_once_goal_whose_click_happened_ends_done_when_the_model_says_blocked(
     t = FakeTarget([card, card])
     out = Runner("s2", t, "Open the card 'Something else' once.", None, cfg, choose=choose).run()
     assert out["status"] == "blocked"
+
+
+def test_a_short_quoted_click_resolves_to_the_full_name_the_goal_quotes_elsewhere(cfg):
+    # seen: "Bring 'WAIT 24 hour (change this if you need) — 1205' into view, then click 'WAIT 24
+    # hour (change this if you need)'" opened the top card: on screen both cards carried their
+    # badge, so the short name matched none and the model picked the first
+    calls = []
+    def choose(view, goal, history):
+        calls.append(1)
+        return {"choice": "c1205", "operation": "C1205"}   # after the click the model repeats it: "once" ends the run
+    title = "WAIT 24 hour (change this if you need)"
+    screen = page(click("c20", f"{title} — 20"), click("c1205", f"{title} — 1205"), click("sv", "Save"), text="x" * 50)
+    t = FakeTarget([screen, screen, screen])
+    out = Runner("s1", t, f"Bring '{title} — 1205' into view, then click '{title}' once (the card showing 1205). Do not click 'Save'.",
+                 None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted] == ["c1205"] and out["status"] in ("done", "unverified") and calls == [1]
+    # two full names quoted: ambiguous, the model's turn
+    calls = []
+    def choose2(view, goal, history):
+        calls.append(1)
+        return {"choice": "DONE", "operation": "DONE"}
+    t = FakeTarget([screen, screen])
+    Runner("s2", t, f"Compare '{title} — 20' and '{title} — 1205', then click '{title}'.", None, cfg, choose=choose2).run()
+    assert t.acted == [] and calls == [1]
