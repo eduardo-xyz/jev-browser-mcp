@@ -96,6 +96,11 @@ first, or report what the app allows; retrying the same click gets the same answ
 A switch, checkbox or radio with no name of its own (a component's stock aria-label, or only an id) is offered
 as `switch — <row>` / `checkbox — <row>` with the same row name the States line uses, so `click 'switch —
 Dashboard'` is unambiguous next to the `Dashboard` nav item and the `Dashboard 9/9` header.
+A value the goal spells out for a field (`select all and type 3`, `enter 'Follow-up call' in the Name field`) is
+typed by the runner itself, no text model involved, as long as it is the only value left to type; two values in
+one goal go to the text model, which must work out which is which. Secrets never come from the goal: a password
+field takes the Keychain entry or pauses. A goal that says to click a label `once` ends `done` after that click,
+even if the model then answers BLOCKED; `read` afterwards to confirm the state.
 Same-titled workflow cards are told apart by their badge (the contact count on the card): off screen they are
 offered as `Bring WAIT 24 hour (change this if you need) — 29 into view`, and on screen the card reads
 `... — 29` too, so quote the title with its badge for both the bring and the click.

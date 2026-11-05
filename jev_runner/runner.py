@@ -173,6 +173,11 @@ _CLICK_QUOTED = re.compile(
     r"\s*['\"\u201c\u2018]([^'\"\u201d\u2019]{1,60})['\"\u201d\u2019]", re.I)
 _NEGATED = re.compile(r"\b(?:not|never|don't|do not|without|avoid|skip|except|instead of)\b[^.;]*$", re.I)
 _QUOTED = re.compile(r"['\"\u201c\u2018]([^'\"\u201d\u2019]{2,60})['\"\u201d\u2019]")   # 'a title' or "a title" in a goal
+# a value the goal spells out for a field: a typing verb, then a quoted string or a bare number
+_TYPE_QUOTED = re.compile(
+    r"\b(?:type|enter|write|input|put|fill(?:\s+in)?|set(?:\s+it)?|replace(?:\s+it)?|change(?:\s+it)?)\b"
+    r"(?:\s+(?:in|into|the|value|text|number|field|with|as|to|by))*"
+    r"\s*(?:['\"\u201c\u2018]([^'\"\u201d\u2019]{1,200})['\"\u201d\u2019]|(-?\d(?:[\d.,:/-]{0,29}\d)?)(?![\w%]))", re.I)
 
 
 def trim_bring_into_view(actions: list[dict], goal: str, limit: int = BRING_LIMIT) -> list[dict]:
@@ -273,6 +278,7 @@ class Runner:
         self.last_stale: dict | None = None  # why the last action was refused as stale (result detail)
         self.last_blocked: dict | None = None  # what Jev was looking at when it gave up (result detail)
         self.last_error: dict | None = None  # the raw error behind target_unreachable (result detail)
+        self._goal_typed: set = set()  # values spelled out in the goal that this run already typed
         self._load_waited = 0.0  # seconds spent waiting on a loading page without asking Jev
         self._load_clear = LOAD_CLEAR_READS  # clear reads since the last loading one (none seen yet)
         self._obs_log: list[tuple[str, str]] = []  # recent (where, text): a field can scroll off
@@ -780,16 +786,24 @@ class Runner:
         if not re.search(r"\bonce\b", goal, re.I):
             return False
         choice = decision.get("choice")
+        norm = lambda text: " ".join((text or "").split()).casefold()
+        done = {norm(h.get("action")) for h in self.history} | {norm(h.get("raw_label")) for h in self.history}
+        quoted = set()
+        for m in _CLICK_QUOTED.finditer(goal):
+            if not _NEGATED.search(goal[max(0, m.start() - 30):m.start()]):
+                quoted.add(norm(m.group(1)))
+        if choice == "BLOCKED":
+            # every click the goal asked for once has happened: there is nothing left to do, so the
+            # model's "no supported operation can progress" is the end, not a failure (seen: a card
+            # clicked and its panel open, reported blocked)
+            return bool(quoted) and quoted <= done
         act = next((a for a in view.get("actions") or []
                     if a.get("id") == choice and a.get("kind") == "click"), None)
         if act is None:
             return False
-        norm = lambda text: " ".join((text or "").split()).casefold()
         labels = {norm(act.get("label")), norm(act.get("raw_label"))} - {""}
-        quoted = {norm(m.group(1)) for m in _CLICK_QUOTED.finditer(goal)}
         if not (labels & quoted):
             return False
-        done = {norm(h.get("action")) for h in self.history} | {norm(h.get("raw_label")) for h in self.history}
         return bool(labels & done)
 
     def _quoted_disabled(self, view: dict) -> str | None:
@@ -1093,7 +1107,27 @@ class Runner:
             return True
         return any(k in self._secret_fields for k in self._field_keys(action))
 
+    def _goal_value(self) -> str | None:
+        """The value the goal spells out for the next field ("select all and type 3", "enter
+        'Follow-up'"): the first such phrase not yet typed in this run, when it is the only one
+        left. The text model is for values the goal leaves to be worked out; a value written in
+        the goal needs no model (seen: a typing step stopped on a text-model HTTP 402 although the
+        goal said exactly what to type). Reached only after the secret and money guards."""
+        values = []
+        for m in _TYPE_QUOTED.finditer(self.goal or ""):
+            if _NEGATED.search((self.goal or "")[max(0, m.start() - 30):m.start()]):
+                continue
+            value = (m.group(1) if m.group(1) is not None else m.group(2) or "").strip()
+            if value and value not in self._goal_typed and value not in values:
+                values.append(value)
+        return values[0] if len(values) == 1 else None
+
     def _model_text(self, action: dict, page: dict) -> str:
+        spelled = self._goal_value()
+        if spelled is not None:
+            _log.info("session=%s goal spells out the value to type: %d chars", self.session_id, len(spelled))
+            self._goal_typed.add(spelled)
+            return spelled
         ctx = model.field_context(self.goal, scrub_value(action, self.secrets),
                                   scrub(page, self.secrets), self.history)
         try:

@@ -773,3 +773,57 @@ def test_a_toggle_already_on_screen_under_its_own_name_is_clicked_not_brought_in
                  choose=scripted_choose(["DONE"])).run()
     assert [a for a, _ in t.acted] == ["sw"]
     assert out["status"] in ("done", "unverified")
+
+
+def test_a_value_the_goal_spells_out_is_typed_without_the_text_model(cfg):
+    # seen: "select all and type 3" stopped on the text model's HTTP 402 although the goal said
+    # exactly what to type; the model is for values the goal leaves open
+    def boom(ctx):
+        raise AssertionError("the text model must not be asked for a value written in the goal")
+    t = FakeTarget([page(fill("n1", "Time period")), page(click("n2", "Save")), page()])
+    out = Runner("s", t, "In the Time period number field (currently 24), select all and type 3. Then click 'Save'.",
+                 None, cfg, choose=scripted_choose(["n1", "DONE"]), field_text=boom).run()   # 'Save' is the runner's own click
+    assert out["status"] == "done" and t.acted == [("n1", "3"), ("n2", None)]
+    # a quoted value, and the same value is not reused for a second field
+    asked = []
+    def text(ctx):
+        asked.append(1)
+        return ("other", {"model": "m", "latency_ms": 1, "usage": {}})
+    t = FakeTarget([page(fill("n1", "Name")), page(fill("n3", "Note")), page()])
+    out = Runner("s", t, "Enter 'Follow-up call' in the Name field, then fill the Note field.", None, cfg,
+                 choose=scripted_choose(["n1", "n3", "DONE"]), field_text=text).run()
+    assert [a for a in t.acted] == [("n1", "Follow-up call"), ("n3", "other")] and asked == [1]
+    # two different spelled-out values: ambiguous, the model decides; a negated value is not one
+    t = FakeTarget([page(fill("n1", "A")), page()])
+    out = Runner("s", t, "Type 5 in A and type 7 in B.", None, cfg, choose=scripted_choose(["n1", "DONE"]),
+                 field_text=text).run()
+    assert t.acted == [("n1", "other")]
+    assert Runner("s", FakeTarget([page()]), "Do not type 9 anywhere.", None, cfg)._goal_value() is None
+    assert Runner("s", FakeTarget([page()]), "Type 3 in the field.", None, cfg)._goal_value() == "3"
+    assert Runner("s", FakeTarget([page()]), "Type 3% there.", None, cfg)._goal_value() is None
+
+
+def test_a_secret_field_never_takes_a_value_from_the_goal(cfg):
+    # the secret guard runs before any value is sourced: a goal that spells a password still pauses
+    t = FakeTarget([page(fill("n1", "Password")), page()])
+    out = Runner("s", t, "Type 'hunter2' in the Password field.", None, cfg,
+                 choose=scripted_choose(["n1"]), field_text=lambda ctx: pytest.fail("no model")).run()
+    assert out["status"] == "paused_needs_input" and t.acted == []
+
+
+def test_a_once_goal_whose_click_happened_ends_done_when_the_model_says_blocked(cfg):
+    # seen: the card clicked and its panel open, then the model answered BLOCKED and the run was
+    # reported blocked although everything the goal asked for had happened
+    calls = []
+    def choose(view, goal, history):
+        calls.append(1)
+        return {"choice": "BLOCKED", "operation": "BLOCKED"}
+    card = page(click("c1", "WAIT 24 hour (change this if you need)"), text="x" * 50)
+    t = FakeTarget([card, card, card])
+    out = Runner("s1", t, "Click 'WAIT 24 hour (change this if you need)' once. Do not click 'Save'.",
+                 None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted] == ["c1"] and out["status"] in ("done", "unverified") and calls == [1]
+    # without "once", or before the click happened, BLOCKED stays blocked
+    t = FakeTarget([card, card])
+    out = Runner("s2", t, "Open the card 'Something else' once.", None, cfg, choose=choose).run()
+    assert out["status"] == "blocked"
