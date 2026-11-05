@@ -82,6 +82,12 @@ clicks named by their field. Same-named controls (one `Domain Options` per card,
 `Domain Options — <the card's first line>`, so name the row or card in the goal. An icon-only row control with no
 name of its own is named by the words of its element id and its row (`user row edit — <person>`,
 `user row delete — <person>` on Settings > Users): quote that label after the click verb to open the row's panel.
+A control beyond the visible box of a panel that scrolls inside the page (a permission group header deep
+in a settings drawer, a row far down a list) is offered as `Bring <label> into view` only when the goal
+names it, so quote the label as the app shows it (`click the 'Dashboard 9/9' group header`): the runner
+wheels the panel until it is in view, then the quoted-click rule clicks it. Controls covered at their
+centre by something else (the panel's own `Delete` under its confirm dialog) are not offered, so `click
+'Delete'` on a confirm dialog hits the dialog's button.
 A click is refused as stale only
 when its own control or the document changed, not when the page scrolled or another field ticked.
 A page whose observe comes back with empty `text` after it has settled really

@@ -714,3 +714,14 @@ def test_stale_strikes_with_nothing_landed_stay_an_error(cfg, monkeypatch):
     monkeypatch.setattr(r, "_check", lambda page: pytest.fail("no action landed: nothing to verify"))
     out = r.run()
     assert out["status"] == "error" and out["reason"] == "stale_page"
+
+
+def test_a_scrolling_panels_off_screen_controls_are_offered_only_by_name(cfg):
+    from jev_runner.runner import trim_bring_into_view
+    rows = [{"id": f"bv{i}", "kind": "scroll", "node": 8000000 + i, "pan_to": True, "in_list": True,
+             "label": f"Bring Row {i} into view"} for i in range(5)]
+    rows[3]["label"] = "Bring Dashboard 9/9 into view"
+    actions = [click("n1", "Save")] + rows
+    kept = trim_bring_into_view(actions, "click the 'Dashboard 9/9' group header to expand it")
+    assert [a["id"] for a in kept] == ["n1", "bv3"]          # five offers, one named: only that one
+    assert [a["id"] for a in trim_bring_into_view(actions, "read the page")] == ["n1"]

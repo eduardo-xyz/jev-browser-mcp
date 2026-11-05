@@ -720,15 +720,76 @@ _OFFSCREEN_JS = """(() => {
       out.push({node: id, label, canvas});
     }
   }
+  // Controls beyond the visible box of a panel that scrolls inside the page (a settings drawer's
+  // 41 permission groups, a long list): the same offer, wheeled over the panel. The runner keeps
+  // these only when the goal names them (trim_bring_into_view), so a long list adds no noise.
+  const LISTCTRL = CONTROL + ',[role="switch"],[role="checkbox"],[role="treeitem"],summary';
+  let s = 0;
+  for (const sc of document.querySelectorAll('div,section,main,ul,ol,aside,nav,form')) {
+    if (s >= 4 || out.length >= 300) break;
+    const cs = getComputedStyle(sc);
+    if (!/(auto|scroll)/.test(cs.overflowY) || sc.scrollHeight <= sc.clientHeight + 20 || !vis(sc)) continue;
+    const cr = sc.getBoundingClientRect();
+    const bx = Math.max(0, cr.left), by = Math.max(0, cr.top), bx2 = Math.min(innerWidth, cr.right), by2 = Math.min(innerHeight, cr.bottom);
+    if (bx2 - bx < 120 || by2 - by < 120) continue;
+    const panel = base + 900000 + 10 + s++;
+    c.nodes.set(panel, sc);
+    for (const e of sc.querySelectorAll(LISTCTRL)) {
+      if (out.length >= 300) break;
+      if (!(e instanceof HTMLElement) || !vis(e)) continue;
+      const r = e.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (r.left >= bx && r.top >= by && r.right <= bx2 && r.bottom <= by2) continue;
+      const label = clean(e.getAttribute('aria-label') || e.innerText || '').slice(0, 40);
+      if (!label || !/[A-Za-z]{2,}/.test(label) || seen.has(label)) continue;
+      seen.add(label);
+      const id = base + out.length;
+      c.nodes.set(id, e);
+      out.push({node: id, label, canvas: panel, list: true});
+    }
+  }
   return out;
 })()"""
+
+# Which of these nodes are covered at their centre by something else (a confirm dialog over the
+# panel whose Delete opened it): the click would land on the cover, and act() refuses it anyway.
+_COVERED_FN = """((ids) => {
+  const c = window.__jevFast;
+  if (!c || !c.nodes) return [];
+  const out = [];
+  for (const id of ids) {
+    const e = c.nodes.get(id);
+    if (!e || !e.isConnected) continue;
+    const r = e.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    const x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (hit && !e.contains(hit) && !hit.contains(e)) out.push(id);
+  }
+  return out;
+})"""
 
 # Where a node is now, relative to its viewport (null when gone): what the pan loop measures.
 _RECT_FN = """(node => {
   const e = window.__jevFast && window.__jevFast.nodes.get(node);
   if (!e || !e.isConnected) return null;
   const r = e.getBoundingClientRect();
-  return {x: r.x, y: r.y, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight};
+  // the box the node must land in: the viewport cut down by every clipping ancestor (a panel that
+  // scrolls inside the page, the canvas pane), so "inside the viewport but under the panel's
+  // bottom edge" still counts as out of view
+  let bx = 0, by = 0, bx2 = innerWidth, by2 = innerHeight;
+  for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) {
+    const cs = getComputedStyle(p);
+    if (!/(auto|scroll|hidden|clip)/.test(cs.overflowX + ' ' + cs.overflowY)) continue;
+    const pr = p.getBoundingClientRect();
+    // a clipping ancestor that is itself out of view (a card with overflow hidden, scrolled away
+    // inside the panel) moves with the node and is no box; only one on screen bounds the node
+    if (pr.right <= 0 || pr.bottom <= 0 || pr.left >= innerWidth || pr.top >= innerHeight) continue;
+    bx = Math.max(bx, pr.left); by = Math.max(by, pr.top); bx2 = Math.min(bx2, pr.right); by2 = Math.min(by2, pr.bottom);
+  }
+  return {x: r.x, y: r.y, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight,
+          bx, by, bw: Math.max(0, bx2 - bx), bh: Math.max(0, by2 - by)};
 })"""
 
 
@@ -741,8 +802,11 @@ def _offscreen_actions(found, prefix: str = "bv") -> list:
         label = f.get("label") if isinstance(f.get("label"), str) else ""
         if not label.strip():
             continue
-        out.append({"id": f"{prefix}{i + 1}", "kind": "scroll", "node": f["node"], "canvas": f["canvas"],
-                    "label": f"Bring {label.strip()} into view", "delta": 0, "scroller": True, "pan_to": True})
+        a = {"id": f"{prefix}{i + 1}", "kind": "scroll", "node": f["node"], "canvas": f["canvas"],
+             "label": f"Bring {label.strip()} into view", "delta": 0, "scroller": True, "pan_to": True}
+        if f.get("list"):
+            a["in_list"] = True  # beyond a scrolling panel's box, not a canvas: offered only when the goal names it
+        out.append(a)
     return out
 
 
@@ -756,9 +820,13 @@ def _pan_into_view(rect, wheel, settle=0.25, steps=8) -> bool:
         if not isinstance(r, dict):
             raise StalePage("Node gone since this decision. Observe again.")
         cx, cy = r["x"] + r["w"] / 2, r["y"] + r["h"] / 2
-        if r["x"] >= 0 and r["y"] >= 0 and r["x"] + r["w"] <= r["vw"] and r["y"] + r["h"] <= r["vh"]:
+        bx, by = r.get("bx", 0), r.get("by", 0)
+        bw, bh = r.get("bw", r["vw"]), r.get("bh", r["vh"])
+        fits_x = r["x"] >= bx and r["x"] + r["w"] <= bx + bw if r["w"] <= bw else bx <= cx <= bx + bw
+        fits_y = r["y"] >= by and r["y"] + r["h"] <= by + bh if r["h"] <= bh else by <= cy <= by + bh
+        if fits_x and fits_y:
             return True
-        need_x, need_y = cx - r["vw"] / 2, cy - r["vh"] / 2
+        need_x, need_y = cx - (bx + bw / 2), cy - (by + bh / 2)
         dx = max(-2400, min(2400, round(need_x * ratio)))
         dy = max(-2400, min(2400, round(need_y * ratio)))
         if not dx and not dy:
@@ -1216,8 +1284,8 @@ class ChromeTarget:
             for a in icons:
                 a.pop("_guard", None)  # in-frame act resolves by node; no upstream freshness check
             labels = {a.get("label") for a in snap.get("actions", [])}
-            raw = list(snap.get("actions", [])) + icons + self._frame_overlay_actions(
-                session_id, labels)
+            raw = self._drop_covered_in_frame(session_id, list(snap.get("actions", []))) + icons + \
+                self._frame_overlay_actions(session_id, labels)
             try:
                 texts = _pointer_text_actions(self._frame_eval(session_id, _POINTER_TEXT_JS), labels)
             except Exception:
@@ -1269,6 +1337,8 @@ class ChromeTarget:
                         merged["pan"] = True
                     if a.get("pan_to") and isinstance(a.get("canvas"), int):
                         merged["pan_to"], merged["canvas"] = True, a["canvas"]
+                        if a.get("in_list"):
+                            merged["in_list"] = True
                     if a.get("scroller") and isinstance(a.get("node"), int):
                         merged["frame_node"], merged["scroller"] = a["node"], True
                     actions.append(merged)
@@ -1414,6 +1484,23 @@ class ChromeTarget:
             out.append({"id": f"ov{i + 1}", "node": f["node"], "kind": "click", "label": label,
                         "role": "button", "value": ""})
         return out
+
+    def _drop_covered_in_frame(self, session_id, raw: list) -> list:
+        """An iframe's snapshot offers every control in its viewport, covered or not (the top frame
+        already drops those). Under a confirm dialog the panel's own "Delete" stayed offered next to
+        the dialog's, became "Delete" vs "Delete — Cancel", and the quoted one was the covered one:
+        act() refused it, three times. Covered controls are not offered."""
+        ids = sorted({a["node"] for a in raw if a.get("kind") in ("click", "fill") and type(a.get("node")) is int})
+        if not ids:
+            return raw
+        try:
+            covered = self._frame_eval(session_id, f"{_COVERED_FN}({json.dumps(ids)})")
+        except Exception:
+            return raw  # never let this break a normal observe
+        gone = {n for n in covered if type(n) is int} if isinstance(covered, list) else set()
+        if not gone:
+            return raw
+        return [a for a in raw if not (a.get("kind") in ("click", "fill") and a.get("node") in gone)]
 
     @staticmethod
     def _drop_unnamed_icons(actions: list) -> None:

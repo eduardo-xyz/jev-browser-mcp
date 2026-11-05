@@ -179,16 +179,20 @@ def trim_bring_into_view(actions: list[dict], goal: str, limit: int = BRING_LIMI
     """A canvas can offer dozens of off-screen nodes; keep the ones the goal names, then the
     first few in screen order, so the model's option list stays short."""
     bring = [a for a in actions if a.get("pan_to")]
-    if len(bring) <= limit:
+    if not bring:
         return actions
     words = set(_WORD.findall((goal or "").lower()))
     def title(a):  # the node's own words, without the "Bring … into view" template
         return _WORD.findall((a.get("label") or "").lower().removeprefix("bring ").removesuffix(" into view"))
-    keep = {a["id"] for a in bring if words & set(title(a))}
+    named = [a for a in bring if words & set(title(a))]
+    keep = {a["id"] for a in named[:limit]}
+    # a scrolling panel's off-screen controls (in_list) are offered only by name; a canvas's nodes
+    # fill the list up to the limit so Jev can see what is out there
     for a in bring:
         if len(keep) >= limit:
             break
-        keep.add(a["id"])
+        if not a.get("in_list"):
+            keep.add(a["id"])
     return [a for a in actions if not a.get("pan_to") or a["id"] in keep]
 
 

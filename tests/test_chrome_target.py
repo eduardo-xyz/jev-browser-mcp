@@ -1395,3 +1395,45 @@ def test_icon_finder_is_not_fenced_by_non_control_roles_and_names_icons_from_the
     assert "idOf(e)" in chrome_mod._ICON_LABEL_FN and "const idOf" in chrome_mod._ICON_LABEL_FN
     # a row's avatar initials yield to the person's name as the row context
     assert "/^[A-Z]{1,3}$/" in chrome_mod._ROW_HELPERS_JS
+
+
+def test_controls_beyond_a_scrolling_panels_box_are_offered_by_name_and_wheeled_to_the_box(monkeypatch):
+    monkeypatch.setattr(chrome_mod.time, "sleep", lambda s: None)
+    out = chrome_mod._offscreen_actions([{"node": 8000000, "label": "Dashboard 9/9", "canvas": 8900010, "list": True},
+                                         {"node": 8000001, "label": "WAIT 4 hours", "canvas": 8900000}])
+    assert out[0]["in_list"] is True and out[0]["label"] == "Bring Dashboard 9/9 into view"
+    assert "in_list" not in out[1]
+    # inside the viewport but under the panel's bottom edge counts as out of view: one wheel down
+    box = {"w": 418, "h": 20, "vw": 1120, "vh": 780, "bx": 526, "by": 132, "bw": 564, "bh": 570}
+    rects = iter([{"x": 623, "y": 1424, **box}, {"x": 623, "y": 407, **box}, {"x": 623, "y": 407, **box}])
+    wheels = []
+    assert chrome_mod._pan_into_view(lambda: next(rects), lambda dx, dy: wheels.append((dx, dy))) is True
+    assert wheels == [(48, 2034)]  # toward the box centre (417), ratio 2 on the first move
+    # a box the runner was not told about falls back to the viewport, as before
+    vp = {"w": 200, "h": 60, "vw": 896, "vh": 780}
+    rects = iter([{"x": 100, "y": 100, **vp}])
+    assert chrome_mod._pan_into_view(lambda: next(rects), lambda dx, dy: wheels.append((dx, dy))) is True
+    assert len(wheels) == 1
+
+
+def test_iframe_controls_covered_at_their_centre_are_not_offered(monkeypatch):
+    # seen: a step's confirm dialog in the editor frame left the panel's own Delete offered under it,
+    # so the two became "Delete" and "Delete — Cancel" and the quoted one was the covered one
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://app.example/x", browser_factory=f)
+    f.browsers[0].evaluate = lambda expr: []
+    monkeypatch.setattr(t, "_iframe_targets", lambda: [("S1", "https://content.other/app")])
+    monkeypatch.setattr(t, "_frame_snapshot", lambda sid: {"actions": [
+        {"id": "e1", "node": 7, "kind": "click", "label": "Delete", "role": "button", "value": ""},
+        {"id": "e2", "node": 8, "kind": "click", "label": "Delete", "role": "button", "value": ""},
+        {"id": "e3", "node": 9, "kind": "click", "label": "Cancel", "role": "button", "value": ""}]})
+    asked = []
+    def frame_eval(sid, expr):
+        if expr.startswith(chrome_mod._COVERED_FN):
+            asked.append(expr)
+            return [7]  # the panel's Delete, under the dialog
+        return []
+    monkeypatch.setattr(t, "_frame_eval", frame_eval)
+    page = t.observe()
+    assert [a["label"] for a in page["actions"] if a.get("frame")] == ["Delete", "Cancel"]
+    assert len(asked) == 1 and asked[0].endswith("([7, 8, 9])")
