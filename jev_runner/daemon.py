@@ -258,6 +258,17 @@ class Daemon:
             if session.uncertain():
                 raise OpError(TERMINAL_MSG)
             start = url_or_app or session.start
+            if session_id is not None and url_or_app and target == "chrome":
+                # A continued session given a URL starts there: the tab is taken to the page
+                # (a no-op when it already shows it). A tab the person closed ends the session.
+                ensure = getattr(session.target, "ensure_at", None)
+                if ensure is not None and not ensure(url_or_app):
+                    self._close_session(session)
+                    raise OpError("tab_gone: the session's tab is closed; run again without "
+                                  "session_id")
+                session.start = url_or_app
+                if hasattr(session.target, "url"):
+                    session.target.url = url_or_app
             set_files = getattr(session.target, "set_files", None)
             if set_files is not None:
                 set_files(upload)  # every run states its own files; none clears the last run's

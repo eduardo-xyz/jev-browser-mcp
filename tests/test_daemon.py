@@ -888,6 +888,34 @@ def test_chrome_tab_that_is_gone_is_closed_and_replaced(daemon_with_fakes, keys)
     assert ids == [b["session_id"]]
 
 
+def test_continued_chrome_session_with_a_url_navigates_there(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    d.script.choices = [["DONE"], ["DONE"], ["DONE"]]
+    a = run(d, target="chrome", goal="a", url_or_app=TAB_URL)["result"]
+    went = []
+    d.script.targets[0].ensure_at = lambda url: went.append(url) or True
+    other = "https://x.test/custom-values"
+    b = run(d, target="chrome", goal="b", url_or_app=other, session_id=a["session_id"])["result"]
+    assert b["session_id"] == a["session_id"] and went == [other] and d.targets_created == 1
+    # the session now belongs to the new page: a later run for it reuses this tab
+    c = run(d, target="chrome", goal="c", url_or_app=other)["result"]
+    assert c["session_id"] == a["session_id"] and d.targets_created == 1
+    # without a URL the run continues where the tab is (only the reuse above checked the tab)
+    d.script.choices.append(["DONE"])
+    run(d, target="chrome", goal="d", session_id=a["session_id"])
+    assert went == [other, other]
+
+
+def test_continued_chrome_session_whose_tab_is_gone_ends(daemon_with_fakes, keys):
+    d = daemon_with_fakes
+    d.script.choices = [["DONE"], ["DONE"]]
+    a = run(d, target="chrome", goal="a", url_or_app=TAB_URL)["result"]
+    d.script.targets[0].ensure_at = lambda url: False
+    r = run(d, target="chrome", goal="b", url_or_app=TAB_URL + "/2", session_id=a["session_id"])
+    assert not r["ok"] and r["error"].startswith("tab_gone") and d.script.targets[0].closed
+    assert d.handle({"op": "status", "args": {}})["result"]["sessions"] == []
+
+
 def test_busy_chrome_tab_is_not_reused(daemon_with_fakes, keys):
     d = daemon_with_fakes
     d.script.choices = [["n1"], ["DONE"]]  # the first run pauses on the OTP field: not settled
