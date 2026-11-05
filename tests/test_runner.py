@@ -738,3 +738,38 @@ def test_a_label_the_goal_says_to_click_once_is_not_clicked_again(cfg):
                  None, cfg, choose=choose).run()
     assert [a for a, _ in t.acted] == ["sw"]              # the runner's own click, then the model's repeat is refused
     assert out["status"] in ("done", "unverified") and calls == [1]
+
+
+def test_a_quoted_control_the_app_has_disabled_ends_blocked_with_the_reason_and_no_model_call(cfg):
+    # seen: "Click 'checkbox — View and manage bulk actions' once" on a checkbox the app had greyed
+    # out: never offered, so the model said BLOCKED three times with no word of why
+    def choose(view, goal, history):
+        raise AssertionError("the model must not be asked about a control the app has disabled")
+    screen = {**page(click("sv", "Save"), text="x" * 50),
+              "disabled": ["checkbox — View and manage bulk actions", "switch — Payments"]}
+    t = FakeTarget([screen, screen])
+    out = Runner("s1", t, "Click 'checkbox — View and manage bulk actions' once to turn it off. Do not click 'Save'.",
+                 None, cfg, choose=choose).run()
+    assert (out["status"], out["reason"]) == ("blocked", "control_disabled")
+    assert out["detail"]["control"] == "checkbox — View and manage bulk actions"
+    assert out["detail"]["disabled"] == ["checkbox — View and manage bulk actions", "switch — Payments"]
+    assert "disabled" in out["hint"] and t.acted == []
+    # a negated mention is not a request to click it
+    t = FakeTarget([screen, screen])
+    out = Runner("s2", t, "Do not click 'checkbox — View and manage bulk actions'.", None, cfg,
+                 choose=scripted_choose(["DONE"])).run()
+    assert out.get("reason") != "control_disabled" and out["status"] == "done"
+
+
+def test_a_toggle_already_on_screen_under_its_own_name_is_clicked_not_brought_into_view_again(cfg):
+    # seen: a group switch offered both as a click ("switch — Opportunities", raw "Icon only toggle")
+    # and as a bring-into-view offer was panned to three times (max_steps) and never clicked
+    sw = {**click("sw", "switch — Opportunities"), "role": "switch", "raw_label": "Icon only toggle", "synth_label": True}
+    bring = {"id": "bv0", "kind": "scroll", "node": 8000000, "pan_to": True, "in_list": True,
+             "label": "Bring switch — Opportunities into view"}
+    on = {**page(sw, click("sv", "Save"), text="x" * 50), "actions": [sw, bring, click("sv", "Save")]}
+    t = FakeTarget([on, on, on])
+    out = Runner("s1", t, "Click 'switch — Opportunities' once to turn it off.", None, cfg,
+                 choose=scripted_choose(["DONE"])).run()
+    assert [a for a, _ in t.acted] == ["sw"]
+    assert out["status"] in ("done", "unverified")

@@ -56,6 +56,9 @@ _READ_TEXT_JS = """(() => {
     if (a !== null && a !== undefined) return a === "true" ? "on" : a === "mixed" ? "mixed" : "off";
     return e.checked ? "on" : "off";
   };
+  // the app has switched the control off for editing: greyed out, no pointer events, aria-disabled
+  const off = e => { try { return e.matches(":disabled") || !!e.closest('[aria-disabled="true"],[inert]') ||
+    getComputedStyle(e).pointerEvents === "none"; } catch (_) { return false; } };
   // innerText stops at EVERY iframe boundary, even same-origin, so recurse into frames we can
   // reach. Cross-origin frames throw on contentDocument and are read via their own CDP target.
   const scan = (doc, depth) => {
@@ -71,7 +74,7 @@ _READ_TEXT_JS = """(() => {
       for (const e of doc.querySelectorAll('[role="switch"],[role="checkbox"],[role="radio"],[role="menuitemcheckbox"],[aria-pressed],input[type="checkbox"],input[type="radio"]')) {
         if (states.length >= 200 || !vis(e)) continue;
         const name = rowName(e) || clean(e.getAttribute("aria-label")) || clean(e.id);
-        if (name) states.push([name, stateOf(e)]);
+        if (name) states.push(off(e) ? [name, stateOf(e), "disabled"] : [name, stateOf(e)]);
       }
       if (depth < 5) for (const f of doc.querySelectorAll("iframe")) {
         let d = null;
@@ -294,6 +297,31 @@ _TOGGLE_NAMES_FN = """((ids) => {
   }
   return out;
 })"""
+
+# Visible switches, checkboxes and radios the app has disabled (aria-disabled, :disabled, inert, or
+# no pointer events), named as the on-screen toggle path names them ("checkbox — <row>"). They are
+# never offered (a click would do nothing), so without this a goal naming one costs a model round
+# trip that ends BLOCKED with no word of why (seen: a permission checkbox greyed out by the app
+# reported as a runner miss three times over).
+_DISABLED_TOGGLES_JS = """(() => {
+  const clean = s => String(s || '').replace(/\\s+/g, ' ').trim();
+  const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
+""" + _ROW_HELPERS_JS + """
+  const TOG = '[role="switch"],[role="checkbox"],[role="radio"],[role="menuitemcheckbox"],[role="menuitemradio"],input[type="checkbox"],input[type="radio"]';
+  const out = [];
+  for (const e of document.querySelectorAll(TOG)) {
+    if (out.length >= 30) break;
+    let off = false;
+    try { off = e.matches(':disabled') || !!e.closest('[aria-disabled="true"],[inert]') || getComputedStyle(e).pointerEvents === 'none'; } catch (_) {}
+    if (!off || !vis(e)) continue;
+    const r = e.getBoundingClientRect();
+    if (!r.width || !r.height || r.bottom < 0 || r.top > innerHeight) continue;
+    const role = e.getAttribute('role') || e.type || 'checkbox';
+    const row = rowOf(e) || clean(e.getAttribute('aria-label'));
+    if (row) out.push(role + ' — ' + row);
+  }
+  return out;
+})()"""
 
 _ICON_LABEL_FN = """((ids) => {
   const c = window.__jevFast;
@@ -1325,6 +1353,7 @@ class ChromeTarget:
             _log.info("labels: synthesized %d top-frame label(s)", n)
         self._merge_iframe_actions(page)
         self._drop_covered_and_flag_loading(page)
+        self._add_disabled(page)
         if page.get("frame_loading"):
             page["loading"] = True  # an iframe still shows loaders, or its text is still changing
         page["readable"] = True
@@ -1332,6 +1361,18 @@ class ChromeTarget:
             self._last_tab_ping = _monotonic()  # keep the claimed tab alive past the broker's sweep
             tab_groups.activity([self._tab])
         return page
+
+    def _add_disabled(self, page: dict) -> None:
+        """page["disabled"]: the names of visible toggles the app has greyed out (top frame). Not
+        actions: the runner answers a goal naming one with `control_disabled` instead of asking the
+        model, and a blocked detail lists them. Never raises."""
+        try:
+            found = self.browser.evaluate(_DISABLED_TOGGLES_JS)
+        except Exception:
+            return  # never let this break a normal observe
+        names = [f[:80] for f in found if isinstance(f, str) and f.strip()] if isinstance(found, list) else []
+        if names:
+            page["disabled"] = names
 
     def _drop_covered_and_flag_loading(self, page: dict) -> None:
         """Remove controls an element outside them is sitting on (a panel, a sticky bar, a dialog
@@ -1694,7 +1735,10 @@ class ChromeTarget:
             out.append(text)
         if labels:
             out.append("Actions: " + " | ".join(labels))
-        states = [f"{n}={v}" for n, v in (data.get("states") or []) if isinstance(n, str) and n]
+        states = []
+        for s in data.get("states") or []:
+            if isinstance(s, (list, tuple)) and len(s) >= 2 and isinstance(s[0], str) and s[0]:
+                states.append(f"{s[0]}={s[1]}" + (" (disabled)" if len(s) > 2 and s[2] else ""))
         if states:
             out.append("States: " + " | ".join(states))
         return "\n".join(out)

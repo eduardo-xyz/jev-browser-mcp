@@ -206,7 +206,9 @@ class _LoggingClient:
     def post(self, *args, **kwargs):
         response = self._inner.post(*args, **kwargs)
         if response.is_error:
-            _log.warning("model provider HTTP %s: %s", response.status_code, response.text[:300])
+            url = str(args[0] if args else kwargs.get("url") or "")
+            host = re.sub(r"^https?://([^/]+).*$", r"\1", url) or "?"
+            _log.warning("model provider HTTP %s at %s: %s", response.status_code, host, response.text[:300])
         return response
 
     def __getattr__(self, name):
@@ -597,6 +599,8 @@ class Runner:
                             if a.get("kind") not in ("wait", "scroll")][:15]
         if page.get("covered"):
             detail["covered"] = page["covered"]
+        if page.get("disabled"):  # named controls the app has greyed out: not on offer by design
+            detail["disabled"] = [d[:60] for d in page["disabled"][:10]]
         # titles a canvas offers to bring into view: the names as the app shows them, so a goal
         # can quote one exactly (a node's settings text, "4 hours", is not on its card)
         canvas = [(a.get("label") or "")[len("Bring "):-len(" into view")] for a in actions if a.get("pan_to")]
@@ -727,8 +731,11 @@ class Runner:
         if not offers:
             return None
         norm = lambda text: " ".join((text or "").split()).casefold()
-        on_screen = {norm(a.get("raw_label") or (a.get("label") or "").split(" — ")[0])
-                     for a in view["actions"] if a.get("kind") in ("click", "fill", "select")}
+        on_screen = set()
+        for a in view["actions"]:
+            if a.get("kind") in ("click", "fill", "select"):
+                on_screen.add(norm(a.get("raw_label") or (a.get("label") or "").split(" — ")[0]))
+                on_screen.add(norm(a.get("label")))  # a toggle's synthetic "switch — <row>" is its name too
         for quoted in _QUOTED.findall(self.goal or ""):
             want = norm(quoted)
             if not want or want in on_screen:
@@ -785,6 +792,25 @@ class Runner:
         done = {norm(h.get("action")) for h in self.history} | {norm(h.get("raw_label")) for h in self.history}
         return bool(labels & done)
 
+    def _quoted_disabled(self, view: dict) -> str | None:
+        """A control the goal says to click that the app has disabled on this screen (greyed out,
+        aria-disabled): its name as the target reports it under page["disabled"], when no control
+        on screen carries that label. Seen: a permission checkbox the app greys out cost three runs
+        that each ended BLOCKED with nothing said about why."""
+        names = {" ".join(d.split()).casefold(): d for d in view.get("disabled") or [] if isinstance(d, str)}
+        if not names:
+            return None
+        norm = lambda text: " ".join((text or "").split()).casefold()
+        offered = {norm(a.get("label")) for a in view.get("actions") or [] if a.get("kind") == "click"}
+        offered |= {norm(a.get("raw_label")) for a in view.get("actions") or [] if a.get("raw_label")}
+        for m in _CLICK_QUOTED.finditer(self.goal or ""):
+            if _NEGATED.search((self.goal or "")[max(0, m.start() - 30):m.start()]):
+                continue
+            want = norm(m.group(1))
+            if want in names and want not in offered:
+                return names[want]
+        return None
+
     def _decide(self, view: dict) -> dict:
         named = self._bring_named(view) or self._quoted_click(view)
         if named is not None:  # no model call: the goal names it outright
@@ -793,6 +819,11 @@ class Runner:
             return {"choice": named["id"], "operation": op, "target": None, "confidence": 1.0,
                     "probabilities": {named["id"]: 1.0}, "operation_probabilities": {op: 1.0},
                     "shortcut": "goal_named"}
+        off = self._quoted_disabled(view)
+        if off is not None:  # the app will not take the click: say so instead of asking the model
+            _log.info("session=%s goal names a control the app has disabled: %s", self.session_id, off)
+            self.last_blocked = {**self._blocked_detail({}, view), "control": off, "why": "control_disabled"}
+            raise _Stop("blocked", "control_disabled")
         self.model_calls += 1
         capped = cap_for_model(trim_bring_into_view(view["actions"], self.goal), self.goal,
                                text=view.get("text") or "")

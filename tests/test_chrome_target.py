@@ -1512,3 +1512,27 @@ def test_a_bring_into_view_offer_is_not_dropped_for_its_covered_destination_and_
     wheels = []
     assert chrome_mod._pan_into_view(lambda: next(rects), lambda dx, dy: wheels.append((dx, dy))) is True
     assert len(wheels) == 1 and wheels[0][1] > 0
+
+
+def test_read_marks_a_toggle_the_app_has_disabled():
+    # seen: a permission checkbox greyed out by the app read as "=on" like its neighbours, so the
+    # goal to turn it off was retried as a runner miss three times
+    block = ChromeTarget._block({"text": "x", "labels": [],
+                                 "states": [["View & manage", "on"], ["View and manage bulk actions", "on", "disabled"]]})
+    assert block.endswith("States: View & manage=on | View and manage bulk actions=on (disabled)")
+    js = chrome_mod._READ_TEXT_JS
+    assert 'aria-disabled="true"' in js and 'pointerEvents === "none"' in js and '"disabled"' in js
+
+
+def test_observe_lists_the_toggles_the_app_has_disabled_by_role_and_row():
+    import types
+    js = chrome_mod._DISABLED_TOGGLES_JS
+    assert "rowOf(e)" in js and "aria-disabled" in js and "pointerEvents === 'none'" in js
+    fake = types.SimpleNamespace(browser=types.SimpleNamespace(
+        evaluate=lambda expr: ["checkbox — View and manage bulk actions", 3, "  "]))
+    page = {"actions": []}
+    ChromeTarget._add_disabled(fake, page)
+    assert page["disabled"] == ["checkbox — View and manage bulk actions"]
+    page = {"actions": []}
+    ChromeTarget._add_disabled(types.SimpleNamespace(browser=types.SimpleNamespace(evaluate=lambda e: {})), page)
+    assert "disabled" not in page
