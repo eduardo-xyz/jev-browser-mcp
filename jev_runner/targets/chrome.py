@@ -1901,12 +1901,21 @@ class ChromeTarget:
     _KEYS = {"Escape": {"key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}}
 
     def _press_key(self, key: str) -> None:
-        """A key press to the page (Escape only), down then up, no target element involved."""
+        """A key press (Escape only), down then up, no target element involved: to the top page
+        and to every cross-origin frame of this tab, since a key goes to the focused frame only
+        and a modal may live in a frame (seen: a workflow editor's issues dialog, closed by an
+        Escape sent to its frame's session and by nothing sent to the page)."""
         spec = self._KEYS.get(key)
         if spec is None:
             raise RuntimeError(f"unsupported key {key!r}")
         self.browser.call("Input.dispatchKeyEvent", type="keyDown", **spec)
         self.browser.call("Input.dispatchKeyEvent", type="keyUp", **spec)
+        for frame in (getattr(self, "_frames", None) or {}).values():
+            try:
+                _cdp("Input.dispatchKeyEvent", session_id=frame["session"], type="keyDown", **spec)
+                _cdp("Input.dispatchKeyEvent", session_id=frame["session"], type="keyUp", **spec)
+            except Exception:
+                pass  # a frame that went away is not the page's problem
 
     def _act_scroller(self, action: dict) -> None:
         """Wheel over a panel that scrolls inside the page, resolved by node like a click: a panel

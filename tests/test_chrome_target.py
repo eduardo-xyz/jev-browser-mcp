@@ -1556,6 +1556,18 @@ def test_escape_is_a_runner_only_key_action_dispatched_as_a_key_event():
         def __init__(self):
             self.browser = types.SimpleNamespace(call=lambda method, **kw: calls.append((method, kw)),
                                                  fresh=lambda *a: pytest.fail("no freshness check for a key"))
-    T().act(page["actions"][0], page)
+    t = T()
+    t.act(page["actions"][0], page)
     assert [c[0] for c in calls] == ["Input.dispatchKeyEvent"] * 2
     assert [c[1]["type"] for c in calls] == ["keyDown", "keyUp"] and calls[0][1]["key"] == "Escape"
+    # and to every cross-origin frame of the tab: a modal in a frame only hears its own frame's keys
+    framed = []
+    monkeypatch_cdp = lambda method, **kw: framed.append((method, kw.get("session_id"), kw.get("type")))
+    orig = chrome_mod._cdp
+    chrome_mod._cdp = monkeypatch_cdp
+    try:
+        t._frames = {0: {"session": "S1", "origin": "https://editor.example"}}
+        t.act(page["actions"][0], page)
+    finally:
+        chrome_mod._cdp = orig
+    assert framed == [("Input.dispatchKeyEvent", "S1", "keyDown"), ("Input.dispatchKeyEvent", "S1", "keyUp")]
