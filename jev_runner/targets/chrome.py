@@ -242,13 +242,14 @@ _ROW_HELPERS_JS = """
     return initials;
   };
   const rowOf = e => {
+    const own = clean(e.innerText || '');  // a control's own text never names its row
     const row = e.closest('tr,[role="row"],li,[role="listitem"],[role="option"],article');
-    if (row) return firstLine(row.innerText);
+    if (row) return firstLine(row.innerText, own);
     let n = e.parentElement;
     for (let i = 0; n && n !== document.body && i < 5; i++, n = n.parentElement) {
       const t = n.innerText || '';
       if (t.length > 300) break;  // reached a container, not a row
-      const s = firstLine(t);
+      const s = firstLine(t, own);
       if (s) return s;
     }
     return '';
@@ -724,7 +725,7 @@ _OFFSCREEN_JS = """(() => {
   const clean = s => String(s || '').replace(/\\s+/g, ' ').trim();
   const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
   const CONTROL = 'a[href],button,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="option"]';
-  const area = innerWidth * innerHeight, out = [], seen = new Set(), base = 8000000;
+  const area = innerWidth * innerHeight, out = [], seen = new Set(), base = 8000000, cards = [];
   let k = 0;
   for (const cv of document.querySelectorAll('div,section,main')) {
     if (k >= 2) break;
@@ -744,15 +745,24 @@ _OFFSCREEN_JS = """(() => {
       if (!r.width || !r.height) continue;
       const inside = r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
       if (inside) continue;
-      // the card's title: its first line with a word in it (a step-number badge may come first)
+      // the card's title: its first line with a word in it; a number on its own line is its badge
+      // (a contact count), which tells same-titled cards apart: "WAIT 24 hour — 29"
       const lines = (e.innerText || '').split('\\n').map(clean).filter(Boolean);
-      const label = clean(e.getAttribute('aria-label') || lines.find(l => /[A-Za-z]{2,}/.test(l)) || lines[0] || '').slice(0, 40);
-      if (!label || seen.has(label)) continue;
-      seen.add(label);
-      const id = base + out.length;
+      const title = clean(e.getAttribute('aria-label') || lines.find(l => /[A-Za-z]{2,}/.test(l)) || lines[0] || '').slice(0, 60);
+      if (!title) continue;
+      const badge = lines.find(l => /^\\d{1,6}$/.test(l)) || '';
+      const id = base + cards.length;  // every card keeps its own node id, offered or deduped
       c.nodes.set(id, e);
-      out.push({node: id, label, canvas});
+      cards.push({node: id, title, badge, canvas});
     }
+  }
+  const titles = {};
+  for (const k of cards) titles[k.title] = (titles[k.title] || 0) + 1;
+  for (const k of cards) {
+    const label = titles[k.title] > 1 && k.badge ? k.title + ' — ' + k.badge : k.title;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    out.push({node: k.node, label, canvas: k.canvas});
   }
   // Controls beyond the visible box of a panel that scrolls inside the page (a settings drawer's
   // 41 permission groups, a long list): the same offer, wheeled over the panel. The runner keeps
@@ -777,7 +787,7 @@ _OFFSCREEN_JS = """(() => {
       const label = clean(e.getAttribute('aria-label') || e.innerText || '').slice(0, 40);
       if (!label || !/[A-Za-z]{2,}/.test(label) || seen.has(label)) continue;
       seen.add(label);
-      const id = base + out.length;
+      const id = base + cards.length + out.length;  // past every card's id
       c.nodes.set(id, e);
       out.push({node: id, label, canvas: panel, list: true});
     }
@@ -844,7 +854,7 @@ def _offscreen_actions(found, prefix: str = "bv") -> list:
     return out
 
 
-def _pan_into_view(rect, wheel, settle=0.25, steps=8) -> bool:
+def _pan_into_view(rect, wheel, settle=0.25, steps=12) -> bool:
     """Wheel a canvas until the node is inside its pane. `rect(node)` measures, `wheel(dx, dy)` pans.
     The wheel-to-pixel ratio is learned from the first move (a canvas pans a fraction of the delta).
     True when the node ended inside the pane; a node that is gone raises StalePage."""

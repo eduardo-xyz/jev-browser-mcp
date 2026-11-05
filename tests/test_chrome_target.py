@@ -1464,3 +1464,10 @@ def test_toggles_sharing_a_stock_label_are_named_by_role_and_row():
     # a nameless toggle is named by its role and row in the labeller too, never by its id words
     fn = chrome_mod._ICON_LABEL_FN
     assert "(toggle ? role : idOf(e))" in fn and "/^(switch|checkbox|radio|menuitemcheckbox|menuitemradio)$/" in fn
+
+
+def test_same_titled_canvas_cards_carry_their_badge_and_a_rows_name_is_not_the_controls_own_text():
+    js = chrome_mod._OFFSCREEN_JS
+    assert "k.title + ' — ' + k.badge" in js and "/^\\d{1,6}$/" in js   # badge: a number on its own line
+    helpers = chrome_mod._ROW_HELPERS_JS
+    assert "firstLine(row.innerText, own)" in helpers and "firstLine(t, own)" in helpers

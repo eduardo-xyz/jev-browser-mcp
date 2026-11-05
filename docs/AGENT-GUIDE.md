@@ -93,6 +93,9 @@ centre by something else (the panel's own `Delete` under its confirm dialog) are
 A switch, checkbox or radio with no name of its own (a component's stock aria-label, or only an id) is offered
 as `switch — <row>` / `checkbox — <row>` with the same row name the States line uses, so `click 'switch —
 Dashboard'` is unambiguous next to the `Dashboard` nav item and the `Dashboard 9/9` header.
+Same-titled workflow cards are told apart by their badge (the contact count on the card): off screen they are
+offered as `Bring WAIT 24 hour (change this if you need) — 29 into view`, and on screen the card reads
+`... — 29` too, so quote the title with its badge for both the bring and the click.
 A click is refused as stale only
 when its own control or the document changed, not when the page scrolled or another field ticked.
 A page whose observe comes back with empty `text` after it has settled really
