@@ -79,11 +79,15 @@ zoom-out on such a canvas: it shrinks node titles below what Jev can read (3 px)
 unlabelled controls on screen, more than the model takes. The text of a cross-origin
 iframe is part of what Jev and the verifier read, not only of `read()`. Dropdown triggers built as plain focusable boxes (a ticket's property fields: `Status: Pending`) are offered as
 clicks named by their field. Same-named controls (one `Domain Options` per card, one `Open` per row) are told apart by their row:
-`Domain Options — <the card's first line>`, so name the row or card in the goal. A click is refused as stale only
+`Domain Options — <the card's first line>`, so name the row or card in the goal. An icon-only row control with no
+name of its own is named by the words of its element id and its row (`user row edit — <person>`,
+`user row delete — <person>` on Settings > Users): quote that label after the click verb to open the row's panel.
+A click is refused as stale only
 when its own control or the document changed, not when the page scrolled or another field ticked.
 A page whose observe comes back with empty `text` after it has settled really
-shows nothing in the viewport (one such GHL route renders only a single-button overlay): check the URL
-in a browser before blaming the tool.
+shows nothing in the viewport (`why: blank_page`): check the URL in a browser before blaming the tool. Known
+GHL routes that render blank on every location: `/settings/team` (the team page is `/settings/users`) and the
+plural `/automation/workflows/<id>` (the editor is `/automation/workflow/<id>`).
 
 **Check before the first Chrome run:** `status` → `chrome.cdp_url` must be the Chrome you expect and
 `keys` must all be true. A jevd attached to the wrong Chrome (one that is not signed in) shows every

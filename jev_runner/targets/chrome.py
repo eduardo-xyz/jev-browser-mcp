@@ -206,12 +206,17 @@ _OVERLAY_JS = """(() => {
 # The row or card a control sits in, by its first line of text: the table row, list item or
 # article around it, else the nearest small ancestor (a card is a <div>, not a row).
 _ROW_HELPERS_JS = """
+  // The row's first wordy line names it, except an avatar's initials ("AM" above the person's
+  // name): a line of one to three capitals yields to the next line when there is one.
   const firstLine = (t, skip) => {
+    let initials = '';
     for (const line of String(t || '').split(/[\\n\\t]/)) {
       const s = clean(line);
-      if (s && s !== skip && /[\\p{L}\\p{N}]/u.test(s)) return s.slice(0, 50);
+      if (!s || s === skip || !/[\\p{L}\\p{N}]/u.test(s)) continue;
+      if (/^[A-Z]{1,3}$/.test(s)) { initials = initials || s; continue; }
+      return s.slice(0, 50);
     }
-    return '';
+    return initials;
   };
   const rowOf = e => {
     const row = e.closest('tr,[role="row"],li,[role="listitem"],[role="option"],article');
@@ -276,6 +281,14 @@ _ICON_LABEL_FN = """((ids) => {
     }
     return '';
   };
+  // An element id like "user-row-edit-shA5FPdRj77vwOG6" names the control once its record key is
+  // dropped: keep the word tokens, drop any token that carries a digit or is a long opaque string.
+  const idOf = e => {
+    const raw = e.id || (e.firstElementChild && e.firstElementChild.id) || '';
+    const words = raw.split(/[-_.:\\/\\s]+/).filter(t => t && !/\\d/.test(t) && t.length < 16);
+    const name = human(words.join(' '));
+    return /[a-z]{3,}/.test(name) ? name : '';
+  };
 """ + _ROW_HELPERS_JS + """
   const out = {};
   for (const id of ids) {
@@ -283,7 +296,7 @@ _ICON_LABEL_FN = """((ids) => {
     if (!e || !e.isConnected) continue;
     const hp = e.getAttribute('aria-haspopup');
     const tag = e.tagName.toLowerCase();
-    const what = attrOf(e) || iconOf(e) || (hp && hp !== 'false' ? 'menu' : '') ||
+    const what = attrOf(e) || iconOf(e) || idOf(e) || (hp && hp !== 'false' ? 'menu' : '') ||
       e.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : 'icon');
     const row = rowOf(e);
     const label = clean(row && row.toLowerCase() !== what.toLowerCase() ? what + ' — ' + row : what).slice(0, 80);
@@ -374,7 +387,12 @@ def _disambiguate_duplicates(actions: list, node_key: str, evaluate) -> int:
 _ICON_CONTROLS_JS = """(() => {
   const c = window.__jevFast;
   if (!c || !c.nodes) return [];
-  const CONTROL = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],[role]';
+  // Only control roles count as an enclosing control: a table's role=none/treegrid wrappers or a
+  // role=main must not hide every icon inside them (seen: a users table whose per-row edit and
+  // delete icons were never offered, so Jev wandered off to search the name elsewhere).
+  const CONTROL = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],' + ['button', 'link',
+    'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemradio', 'menuitemcheckbox', 'option',
+    'gridcell', 'combobox', 'textbox', 'searchbox', 'spinbutton'].map(r => '[role="' + r + '"]').join(',');
   const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
   const small = r => r.width >= 8 && r.height >= 8 && r.width <= 64 && r.height <= 64;
   const clicky = e => e.hasAttribute('onclick') || (e.tabIndex >= 0 && e.hasAttribute('tabindex')) ||

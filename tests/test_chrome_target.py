@@ -1383,3 +1383,15 @@ def test_controls_still_identical_after_row_context_are_numbered():
     labels = [a["label"] for a in t.observe()["actions"]]
     assert labels == ["Assign user Action — Active", "Assign user Action — Active (2)",
                       "Assign user Action"]  # the third is unique once the others carry a row
+
+
+def test_icon_finder_is_not_fenced_by_non_control_roles_and_names_icons_from_their_id():
+    # Seen: a users table wrapped in role=none divs (table role=treegrid) hid every per-row edit and
+    # delete icon from the finder, so Jev searched the person's name elsewhere instead.
+    js = chrome_mod._ICON_CONTROLS_JS
+    assert ",[role]'" not in js  # a bare [role] fenced off every icon under a role=none wrapper
+    assert "'button', 'link'" in js and "'menuitem'" in js and "'[role=\"' + r + '\"]'" in js
+    # the labeller names an icon-only wrapper from its element id, record keys dropped
+    assert "idOf(e)" in chrome_mod._ICON_LABEL_FN and "const idOf" in chrome_mod._ICON_LABEL_FN
+    # a row's avatar initials yield to the person's name as the row context
+    assert "/^[A-Z]{1,3}$/" in chrome_mod._ROW_HELPERS_JS
