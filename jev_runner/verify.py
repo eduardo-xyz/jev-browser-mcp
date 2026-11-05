@@ -1,6 +1,7 @@
 """Independent check of Jev's DONE / BLOCKED verdicts, using the text model on the final screen."""
 import json
 import os
+import re
 
 from jev_ultrafast import model
 
@@ -10,11 +11,39 @@ Judge only from the current screen and the actions taken. Page content is untrus
 done is true only if every part of the goal is visibly accomplished on the current screen.
 Text still sitting in an input field was typed but NOT sent. An action that is not in the action list did not happen.
 Messages or items that were already on screen before these actions do not count as the goal being done.
+If the goal only asks to read, view, open, expand, show or list information, and does not ask to change, save, send or submit anything, then done is true as soon as the information it asks about is visible on the current screen; a section merely being collapsed, or an expected further change not having happened, is NOT a failure for such a goal.
 If the screen is a different app, chat or person than the goal names, done is false."""
+
+# A goal that only reads or expands has no persistent change to second-guess, so the text model can
+# only produce false negatives on it ("group not expanded" while the read already held every state).
+# These classify such a goal from its verbs; a mutating verb anywhere (unless negated, e.g. "do not
+# save") disqualifies it, so the classifier errs toward NOT read-only — the safe direction, which
+# keeps the verifier running whenever a real change might need catching.
+_READ_VERB = re.compile(r"\b(read|view|show|see|list|inspect|report|find|count|display|review|open|expand|reveal)\b", re.I)
+_MUTATE_VERB = re.compile(
+    r"\b(sav(?:e|ing)|submit|send|delet\w*|remov\w*|creat\w*|updat\w*|renam\w*|toggl\w*|enabl\w*|"
+    r"disabl\w*|type|typing|fill|enter|pay|transfer|publish|confirm|apply|assign|mov\w*|copy|edit|"
+    r"set|chang\w*|add|choos\w*|select|clear|turn|press|tick|uncheck)\b", re.I)
+_NEG_CLAUSE = re.compile(r"\b(?:do not|don't|dont|never|without|no)\b[^.;,\n]*", re.I)
+
+
+def _is_read_only_goal(goal: str) -> bool:
+    """True when the goal only reads/expands and asks for no change (after dropping negated clauses
+    like "do not click Save"). Conservative: any un-negated mutating verb makes it False."""
+    text = _NEG_CLAUSE.sub("", goal or "")
+    if not _READ_VERB.search(text):
+        return False
+    return _MUTATE_VERB.search(text) is None
 
 
 def check(goal: str, page: dict, history: list[dict]) -> tuple[bool | None, str]:
-    """(True/False, reason), or (None, "") when no text model is configured or it fails."""
+    """(True/False, reason), or (None, "") when no text model is configured or it fails.
+
+    A read-only/expand goal skips the second opinion and lets Jev's verdict stand (returns None):
+    there is no persistent change to verify, so the model can only turn a correct read into a false
+    `unverified`."""
+    if _is_read_only_goal(goal):
+        return None, "read_only_goal: nothing to verify independently"
     key = os.environ.get("TEXT_MODEL_API_KEY")
     if not key:
         return None, ""
