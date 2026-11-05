@@ -1571,3 +1571,17 @@ def test_escape_is_a_runner_only_key_action_dispatched_as_a_key_event():
     finally:
         chrome_mod._cdp = orig
     assert framed == [("Input.dispatchKeyEvent", "S1", "keyDown"), ("Input.dispatchKeyEvent", "S1", "keyUp")]
+
+
+def test_keepalive_heartbeats_the_claimed_tab():
+    import types
+    pinged = []
+    orig = chrome_mod.tab_groups.activity
+    chrome_mod.tab_groups.activity = lambda ids: pinged.append(list(ids))
+    try:
+        t = types.SimpleNamespace(_grouping=True, _tab="TAB1", _last_tab_ping=0.0)
+        ChromeTarget.keepalive(t)
+        ChromeTarget.keepalive(types.SimpleNamespace(_grouping=False, _tab="TAB2", _last_tab_ping=0.0))
+    finally:
+        chrome_mod.tab_groups.activity = orig
+    assert pinged == [["TAB1"]]   # the ungrouped target pings nothing

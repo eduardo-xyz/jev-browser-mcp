@@ -904,3 +904,18 @@ def test_resume_typed_is_forwarded(daemon_with_fakes, keys):
     d.script.targets[0]._advance()  # the person typed the code: the app moved on
     r = d.handle({"op": "resume", "args": {"session_id": r["session_id"], "typed": True}})["result"]
     assert r["status"] == "done" and r["last_actions"][0] == "fill · OTP = •••"
+
+
+def test_keepalive_pings_every_open_sessions_tab(daemon_with_fakes, keys):
+    # seen: a session blocked for ten minutes never observed, so its tab got no heartbeat and the
+    # browser broker's sweep closed it (empty reads, screenshot failed)
+    d = daemon_with_fakes
+    sid = run(d, target="android", goal="otp")["result"]["session_id"]
+    target = d.script.targets[0]
+    pings = []
+    target.keepalive = lambda: pings.append(1)
+    assert d.keepalive() == 1 and pings == [1]
+    target.keepalive = lambda: (_ for _ in ()).throw(RuntimeError("broker down"))
+    assert d.keepalive() == 0   # a failed ping is nobody's problem
+    assert d.handle({"op": "end_session", "args": {"session_id": sid}})["ok"]
+    assert d.keepalive() == 0   # closed sessions are not pinged

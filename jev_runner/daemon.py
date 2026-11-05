@@ -561,6 +561,25 @@ class Daemon:
 
     # -- lifecycle --------------------------------------------------------
 
+    def keepalive(self) -> int:
+        """Heartbeat for every open session's tab, so the browser broker's idle sweep never closes
+        a tab a session still holds. Observe pings on its own, but a session that is blocked or
+        only read for minutes never observes (seen: a workflow editor tab gone while its session
+        sat blocked, leaving empty reads and a failed screenshot). Best-effort, never raises."""
+        with self._lock:
+            sessions = list(self.sessions.values())
+        count = 0
+        for s in sessions:
+            ping = getattr(s.target, "keepalive", None)
+            if s.closed or ping is None:
+                continue
+            try:
+                ping()
+                count += 1
+            except Exception:
+                pass
+        return count
+
     def reap(self, now: float) -> list[str]:
         """Close sessions idle longer than the TTL. Busy sessions are never idle."""
         with self._lock:
@@ -669,6 +688,7 @@ def serve(on_ready=None) -> bool:
             while not stop.wait(REAP_EVERY_S):
                 try:
                     daemon.reap(time.time())
+                    daemon.keepalive()
                 except Exception:
                     log.exception("reaper failed")
 

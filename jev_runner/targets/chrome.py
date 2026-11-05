@@ -1388,6 +1388,14 @@ class ChromeTarget:
         if names:
             page["disabled"] = names
 
+    def keepalive(self) -> None:
+        """Tell the browser broker this tab is in use (the daemon calls it every minute for every
+        open session): observe() pings only while a run observes, and an idle session's tab must
+        survive the broker's sweep too. Never raises."""
+        if self._grouping and self._tab:
+            self._last_tab_ping = _monotonic()
+            tab_groups.activity([self._tab])
+
     def _drop_covered_and_flag_loading(self, page: dict) -> None:
         """Remove controls an element outside them is sitting on (a panel, a sticky bar, a dialog
         backdrop): act() would refuse them anyway, so offering them only buys stale_page strikes.
