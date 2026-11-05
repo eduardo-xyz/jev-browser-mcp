@@ -24,7 +24,10 @@ _MUTATE_VERB = re.compile(
     r"\b(sav(?:e|ing)|submit|send|delet\w*|remov\w*|creat\w*|updat\w*|renam\w*|toggl\w*|enabl\w*|"
     r"disabl\w*|type|typing|fill|enter|pay|transfer|publish|confirm|apply|assign|mov\w*|copy|edit|"
     r"set|chang\w*|add|choos\w*|select|clear|turn|press|tick|uncheck)\b", re.I)
-_NEG_CLAUSE = re.compile(r"\b(?:do not|don't|dont|never|without|no)\b[^.;,\n]*", re.I)
+# A bare "no" is excluded on purpose: "no tags and delete it" would otherwise swallow a real
+# mutating verb and misclassify a delete goal as read-only. "no changes"/"no edits" still keep
+# their mutating verb, so such goals fall through to NOT read-only — the safe direction.
+_NEG_CLAUSE = re.compile(r"\b(?:do not|don't|dont|never|without)\b[^.;,\n]*", re.I)
 
 
 def _is_read_only_goal(goal: str) -> bool:

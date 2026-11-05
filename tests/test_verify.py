@@ -28,6 +28,9 @@ def test_is_read_only_goal_false_for_action_goals():
     # a goal that reads AND saves still needs verifying — the save is the part that can fail
     assert not verify._is_read_only_goal(
         "Expand the group, read the switches, then click Save to apply.")
+    # a bare "no" is NOT a negation: "no tags" must not swallow the later "delete" verb
+    assert not verify._is_read_only_goal("Open the contact with no tags and delete it.")
+    assert not verify._is_read_only_goal("View the row that has no owner, then remove it.")
 
 
 def test_check_skips_model_and_lets_verdict_stand_for_read_only_goal(monkeypatch):
