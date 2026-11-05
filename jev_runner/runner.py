@@ -765,6 +765,26 @@ class Runner:
             return None  # not on screen yet, or ambiguous: the model's turn
         return None
 
+    def _once_done(self, decision: dict, view: dict) -> bool:
+        """True when the model wants to click a quoted label again that the goal says to click
+        "once" and this run already clicked. Seen: a group switch clicked three times in one run,
+        the model re-clicking because the group still read partly on after the first click."""
+        goal = self.goal or ""
+        if not re.search(r"\bonce\b", goal, re.I):
+            return False
+        choice = decision.get("choice")
+        act = next((a for a in view.get("actions") or []
+                    if a.get("id") == choice and a.get("kind") == "click"), None)
+        if act is None:
+            return False
+        norm = lambda text: " ".join((text or "").split()).casefold()
+        labels = {norm(act.get("label")), norm(act.get("raw_label"))} - {""}
+        quoted = {norm(m.group(1)) for m in _CLICK_QUOTED.finditer(goal)}
+        if not (labels & quoted):
+            return False
+        done = {norm(h.get("action")) for h in self.history} | {norm(h.get("raw_label")) for h in self.history}
+        return bool(labels & done)
+
     def _decide(self, view: dict) -> dict:
         named = self._bring_named(view) or self._quoted_click(view)
         if named is not None:  # no model call: the goal names it outright
@@ -781,6 +801,11 @@ class Runner:
                       self.session_id, len(capped), len(view["actions"]))
             view = {**view, "actions": capped}
         decision = self._timed("decide_ms", self._choose, view, self.goal, self.history)
+        if self._once_done(decision, view):
+            _log.info("session=%s goal says once and it was clicked: done", self.session_id)
+            decision = {"choice": "DONE", "operation": "DONE", "target": None, "confidence": 1.0,
+                        "probabilities": {"DONE": 1.0}, "operation_probabilities": {"DONE": 1.0},
+                        "shortcut": "once"}
         if os.environ.get("JEV_DEBUG_IFRAME"):
             probs = decision.get("probabilities", {}) or {}
             top = dict(sorted(probs.items(), key=lambda kv: -kv[1])[:4])

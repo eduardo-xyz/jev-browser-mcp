@@ -1488,3 +1488,27 @@ def test_toggles_under_a_stock_aria_label_are_named_by_role_and_row_on_screen_an
     assert actions[0]["raw_label"] == "Icon only toggle" and actions[0]["synth_label"] is True
     assert asked[0].startswith(chrome_mod._TOGGLE_NAMES_FN) and asked[0].endswith("([1, 2, 3])")  # only toggles asked
     assert "label = role + ' — ' + row" in chrome_mod._OFFSCREEN_JS   # the same name beyond a panel's box
+
+
+def test_a_bring_into_view_offer_is_not_dropped_for_its_covered_destination_and_the_pan_needs_a_hit(monkeypatch):
+    # seen: "Bring switch — AI Studio into view" was produced, then dropped as covered because the
+    # switch sat under the drawer's sticky footer; the destination is covered or out of view by design
+    f = FakeBrowserFactory(loaded=[True])
+    t = ChromeTarget("https://x.test", browser_factory=f)
+    b = f.browsers[0]
+    b.evaluate = lambda expr: ({"covered": [8000000, 5], "loading": False} if expr.startswith(chrome_mod._POST_OBSERVE_FN)
+                               else [{"node": 8000000, "label": "switch — AI Studio", "canvas": 8900010, "list": True}]
+                               if expr.startswith(chrome_mod._OFFSCREEN_JS) else [])
+    orig = b.observe
+    b.observe = lambda screenshot=True: {**orig(screenshot=screenshot), "actions": [
+        {"id": "e1", "node": 5, "kind": "click", "label": "Cancel", "role": "button"}]}
+    page = t.observe()
+    assert [a["label"] for a in page["actions"] if a.get("pan_to")] == ["Bring switch — AI Studio into view"]
+    assert not [a for a in page["actions"] if a.get("node") == 5]   # a covered click is still dropped
+    # inside the box but under a sticky footer: not there yet, one wheel toward the box centre
+    monkeypatch.setattr(chrome_mod.time, "sleep", lambda s: None)
+    box = {"w": 36, "h": 20, "vw": 1120, "vh": 780, "bx": 526, "by": 132, "bw": 564, "bh": 570}
+    rects = iter([{"x": 575, "y": 680, "hit": False, **box}, {"x": 575, "y": 417, "hit": True, **box}, {"x": 575, "y": 417, "hit": True, **box}])
+    wheels = []
+    assert chrome_mod._pan_into_view(lambda: next(rects), lambda dx, dy: wheels.append((dx, dy))) is True
+    assert len(wheels) == 1 and wheels[0][1] > 0

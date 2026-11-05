@@ -96,6 +96,8 @@ Dashboard'` is unambiguous next to the `Dashboard` nav item and the `Dashboard 9
 Same-titled workflow cards are told apart by their badge (the contact count on the card): off screen they are
 offered as `Bring WAIT 24 hour (change this if you need) — 29 into view`, and on screen the card reads
 `... — 29` too, so quote the title with its badge for both the bring and the click.
+A goal that says to click a quoted label `once` is honoured: after the runner's own click, a repeat of that
+label is refused and the run ends, so a toggle is never flipped back (give such a goal `max_steps` 3 or so).
 A click is refused as stale only
 when its own control or the document changed, not when the page scrolled or another field ticked.
 A page whose observe comes back with empty `text` after it has settled really

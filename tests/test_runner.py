@@ -725,3 +725,16 @@ def test_a_scrolling_panels_off_screen_controls_are_offered_only_by_name(cfg):
     kept = trim_bring_into_view(actions, "click the 'Dashboard 9/9' group header to expand it")
     assert [a["id"] for a in kept] == ["n1", "bv3"]          # five offers, one named: only that one
     assert [a["id"] for a in trim_bring_into_view(actions, "read the page")] == ["n1"]
+
+
+def test_a_label_the_goal_says_to_click_once_is_not_clicked_again(cfg):
+    calls = []
+    def choose(view, goal, history):
+        calls.append(1)
+        return {"choice": "sw", "operation": "SW"}      # the model keeps asking for the same switch
+    on = page(click("sw", "switch — Opportunities"), click("sv", "Save"), text="x" * 50)
+    t = FakeTarget([on, on, on, on])
+    out = Runner("s1", t, "Click 'switch — Opportunities' once to turn it off. Do not click 'Save'.",
+                 None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted] == ["sw"]              # the runner's own click, then the model's repeat is refused
+    assert out["status"] in ("done", "unverified") and calls == [1]

@@ -831,7 +831,11 @@ _OFFSCREEN_JS = """(() => {
       if (!(e instanceof HTMLElement) || !vis(e)) continue;
       const r = e.getBoundingClientRect();
       if (!r.width || !r.height) continue;
-      if (r.left >= bx && r.top >= by && r.right <= bx2 && r.bottom <= by2) continue;
+      if (r.left >= bx && r.top >= by && r.right <= bx2 && r.bottom <= by2) {
+        // inside the box but under a sticky footer or header: still a scroll away, so offered
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (hit && (e.contains(hit) || hit.contains(e))) continue;
+      }
       const role = e.getAttribute('role') || '';
       let label = clean(e.getAttribute('aria-label') || e.innerText || '').slice(0, 40);
       if (/^(switch|checkbox|radio)$/.test(role)) {  // a toggle: its role and row, as on screen
@@ -891,8 +895,10 @@ _RECT_FN = """(node => {
     if (pr.right <= 0 || pr.bottom <= 0 || pr.left >= innerWidth || pr.top >= innerHeight) continue;
     bx = Math.max(bx, pr.left); by = Math.max(by, pr.top); bx2 = Math.min(bx2, pr.right); by2 = Math.min(by2, pr.bottom);
   }
+  const hitEl = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+  const hit = !!hitEl && (e.contains(hitEl) || hitEl.contains(e));  // a sticky footer over the node: not there yet
   return {x: r.x, y: r.y, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight,
-          bx, by, bw: Math.max(0, bx2 - bx), bh: Math.max(0, by2 - by)};
+          bx, by, bw: Math.max(0, bx2 - bx), bh: Math.max(0, by2 - by), hit};
 })"""
 
 
@@ -927,9 +933,11 @@ def _pan_into_view(rect, wheel, settle=0.25, steps=12) -> bool:
         bw, bh = r.get("bw", r["vw"]), r.get("bh", r["vh"])
         fits_x = r["x"] >= bx and r["x"] + r["w"] <= bx + bw if r["w"] <= bw else bx <= cx <= bx + bw
         fits_y = r["y"] >= by and r["y"] + r["h"] <= by + bh if r["h"] <= bh else by <= cy <= by + bh
-        if fits_x and fits_y:
+        if fits_x and fits_y and r.get("hit", True):
             return True
         need_x, need_y = cx - (bx + bw / 2), cy - (by + bh / 2)
+        if fits_x and fits_y and abs(need_y) < 1 and abs(need_x) < 1:
+            return False  # centred in the box and still covered: the cover is not a scroll away
         dx = max(-2400, min(2400, round(need_x * ratio)))
         dy = max(-2400, min(2400, round(need_y * ratio)))
         if not dx and not dy:
@@ -1332,7 +1340,8 @@ class ChromeTarget:
         instead of asking Jev about a page that is still arriving."""
         actions = page.get("actions") or []
         nodes = [a["node"] for a in actions
-                 if type(a.get("node")) is int and a.get("frame") is None and not a.get("file_input")]
+                 if type(a.get("node")) is int and a.get("frame") is None and not a.get("file_input")
+                 and not a.get("pan_to")]  # a bring-into-view destination is covered or out of view by design
         try:
             res = self.browser.evaluate(f"{_POST_OBSERVE_FN}({json.dumps(nodes)}, "
                                         f"{json.dumps(_LOADING_SELECTOR)})")
@@ -1342,7 +1351,8 @@ class ChromeTarget:
             return
         covered = set(res.get("covered") or [])
         if covered:
-            page["actions"] = [a for a in actions if a.get("node") not in covered or a.get("frame") is not None]
+            page["actions"] = [a for a in actions if a.get("node") not in covered or a.get("frame") is not None
+                               or a.get("pan_to")]
             page["covered"] = len(covered)
         page["loading"] = bool(res.get("loading"))
 
