@@ -319,8 +319,12 @@ _ICON_LABEL_FN = """((ids) => {
     if (!e || !e.isConnected) continue;
     const hp = e.getAttribute('aria-haspopup');
     const tag = e.tagName.toLowerCase();
-    const what = attrOf(e) || iconOf(e) || idOf(e) || (hp && hp !== 'false' ? 'menu' : '') ||
-      e.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : 'icon');
+    // a toggle's element id is a record key with a prefix ("perm-reporting-phone-readonly"): its
+    // row names it better, so "checkbox — View phone call stats", never the id words
+    const role = e.getAttribute('role') || ((tag === 'input' && /^(checkbox|radio)$/.test(e.type)) ? e.type : '');
+    const toggle = /^(switch|checkbox|radio|menuitemcheckbox|menuitemradio)$/.test(role);
+    const what = attrOf(e) || iconOf(e) || (toggle ? role : idOf(e)) || (hp && hp !== 'false' ? 'menu' : '') ||
+      role || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : 'icon');
     const row = rowOf(e);
     const label = clean(row && row.toLowerCase() !== what.toLowerCase() ? what + ' — ' + row : what).slice(0, 80);
     if (label) out[id] = label;
@@ -328,6 +332,7 @@ _ICON_LABEL_FN = """((ids) => {
   return out;
 })"""
 
+_TOGGLE_ROLES = {"switch", "checkbox", "radio", "menuitemcheckbox", "menuitemradio"}
 _UPSTREAM_ROLES = {"button", "link", "checkbox", "radio", "switch", "tab", "menuitem",
                    "menuitemradio", "option", "gridcell", "combobox", "textbox", "searchbox",
                    "spinbutton"}
@@ -384,10 +389,16 @@ def _disambiguate_duplicates(actions: list, node_key: str, evaluate) -> int:
     if not isinstance(found, dict):
         return 0
     count = 0
+    # Three or more toggles under one stock label ("Icon only toggle", a component's default
+    # aria-label) are named by their role instead: "switch — Dashboard" reads as the thing it is,
+    # and a goal can quote it apart from the "Dashboard" nav item and the "Dashboard 9/9" header.
+    stock = {key for key, g in groups.items() if len(g) >= 3
+             and all(a.get("role") in _TOGGLE_ROLES for a in g)}
     for a in dups:
         row = found.get(str(a[node_key]))
         if isinstance(row, str) and row.strip() and row.strip().lower() != a["label"].strip().lower():
-            a["raw_label"], a["label"] = a["label"], f"{a['label']} — {row.strip()}"[:80]
+            base = a["role"] if (a.get("kind"), a["label"]) in stock else a["label"]
+            a["raw_label"], a["label"] = a["label"], f"{base} — {row.strip()}"[:80]
             a["row_label"] = True
             count += 1
     # Still identical after that (several workflow nodes named alike, each its own row): number

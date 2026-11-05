@@ -90,6 +90,9 @@ centre by something else (the panel's own `Delete` under its confirm dialog) are
 'Delete'` on a confirm dialog hits the dialog's button.
 `read()` ends with a `States:` line naming every visible switch, checkbox and radio with `=on`, `=off` or
 `=mixed` (named by its row), so a partial permission group can be recorded before anything is toggled.
+A switch, checkbox or radio with no name of its own (a component's stock aria-label, or only an id) is offered
+as `switch — <row>` / `checkbox — <row>` with the same row name the States line uses, so `click 'switch —
+Dashboard'` is unambiguous next to the `Dashboard` nav item and the `Dashboard 9/9` header.
 A click is refused as stale only
 when its own control or the document changed, not when the page scrolled or another field ticked.
 A page whose observe comes back with empty `text` after it has settled really

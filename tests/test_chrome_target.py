@@ -1447,3 +1447,20 @@ def test_read_reports_the_state_of_visible_toggles():
     assert block.endswith("Actions: Save\nStates: Dashboard=on | Reporting=off")
     assert "States:" not in ChromeTarget._block({"text": "x", "labels": [], "states": []})
     assert 'role="switch"' in chrome_mod._READ_TEXT_JS and "aria-checked" in chrome_mod._READ_TEXT_JS
+
+
+def test_toggles_sharing_a_stock_label_are_named_by_role_and_row():
+    # seen: fifteen group switches all labelled "Icon only toggle" became "Icon only toggle — Dashboard",
+    # so a goal quoting 'Dashboard' hit the nav item; "switch — Dashboard" is a name of its own
+    actions = [{"id": f"e{i}", "node": i, "kind": "click", "role": "switch", "label": "Icon only toggle"} for i in range(3)]
+    actions.append({"id": "e9", "node": 9, "kind": "click", "role": "button", "label": "Open"})
+    actions.append({"id": "e10", "node": 10, "kind": "click", "role": "button", "label": "Open"})
+    rows = {"0": "Dashboard", "1": "Reporting", "2": "Payments", "9": "Row A", "10": "Row B"}
+    n = chrome_mod._disambiguate_duplicates(actions, "node", lambda expr: rows)
+    assert n == 5
+    assert [a["label"] for a in actions] == ["switch — Dashboard", "switch — Reporting", "switch — Payments",
+                                             "Open — Row A", "Open — Row B"]   # two buttons keep their own word
+    assert actions[0]["raw_label"] == "Icon only toggle"
+    # a nameless toggle is named by its role and row in the labeller too, never by its id words
+    fn = chrome_mod._ICON_LABEL_FN
+    assert "(toggle ? role : idOf(e))" in fn and "/^(switch|checkbox|radio|menuitemcheckbox|menuitemradio)$/" in fn
