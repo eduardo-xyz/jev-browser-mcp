@@ -1437,3 +1437,13 @@ def test_iframe_controls_covered_at_their_centre_are_not_offered(monkeypatch):
     page = t.observe()
     assert [a["label"] for a in page["actions"] if a.get("frame")] == ["Delete", "Cancel"]
     assert len(asked) == 1 and asked[0].endswith("([7, 8, 9])")
+
+
+def test_read_reports_the_state_of_visible_toggles():
+    # seen: a permission group read listed its nine switch labels but not which were on, so a
+    # partial group could not be recorded before it was changed
+    block = ChromeTarget._block({"text": "Dashboard\n9/9", "labels": ["Save"],
+                                 "states": [["Dashboard", "on"], ["Reporting", "off"]]})
+    assert block.endswith("Actions: Save\nStates: Dashboard=on | Reporting=off")
+    assert "States:" not in ChromeTarget._block({"text": "x", "labels": [], "states": []})
+    assert 'role="switch"' in chrome_mod._READ_TEXT_JS and "aria-checked" in chrome_mod._READ_TEXT_JS

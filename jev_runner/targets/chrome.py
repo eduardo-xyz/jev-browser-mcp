@@ -38,7 +38,24 @@ READ_LIMIT = 20000  # cap merged read text so a huge page can't blow up a result
 # why a cross-origin (out-of-process) iframe must be read in its own CDP session and merged in.
 _READ_TEXT_JS = """(() => {
   const vis = e => { try { return e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); } catch (_) { return true; } };
-  const seen = new Set(), labels = [], texts = [];
+  const seen = new Set(), labels = [], texts = [], states = [];
+  const clean = s => String(s || "").replace(/\\s+/g, " ").trim();
+  // a toggle's name: the short line of text nearest to it (its row), else its aria-label
+  const rowName = e => {
+    let n = e.parentElement;
+    for (let i = 0; n && n !== document.body && i < 5; i++, n = n.parentElement) {
+      const t = n.innerText || "";
+      if (t.length > 300) break;
+      const line = t.split(/[\\n\\t]/).map(clean).find(l => l && /[A-Za-z]{2,}/.test(l));
+      if (line) return line.slice(0, 60);
+    }
+    return "";
+  };
+  const stateOf = e => {
+    const a = e.getAttribute("aria-checked") || e.getAttribute("aria-pressed");
+    if (a !== null && a !== undefined) return a === "true" ? "on" : a === "mixed" ? "mixed" : "off";
+    return e.checked ? "on" : "off";
+  };
   // innerText stops at EVERY iframe boundary, even same-origin, so recurse into frames we can
   // reach. Cross-origin frames throw on contentDocument and are read via their own CDP target.
   const scan = (doc, depth) => {
@@ -50,6 +67,12 @@ _READ_TEXT_JS = """(() => {
         const l = (e.innerText || e.getAttribute("aria-label") || "").trim().replace(/\\s+/g, " ").slice(0, 80);
         if (l && !seen.has(l)) { seen.add(l); labels.push(l); }
       }
+      // on/off controls, so a partial group ("AI Agents 2/11") can be recorded before it is changed
+      for (const e of doc.querySelectorAll('[role="switch"],[role="checkbox"],[role="radio"],[role="menuitemcheckbox"],[aria-pressed],input[type="checkbox"],input[type="radio"]')) {
+        if (states.length >= 200 || !vis(e)) continue;
+        const name = rowName(e) || clean(e.getAttribute("aria-label")) || clean(e.id);
+        if (name) states.push([name, stateOf(e)]);
+      }
       if (depth < 5) for (const f of doc.querySelectorAll("iframe")) {
         let d = null;
         try { d = f.contentDocument; } catch (_) { d = null; }
@@ -58,7 +81,7 @@ _READ_TEXT_JS = """(() => {
     } catch (_) {}
   };
   scan(document, 0);
-  return {text: texts.join("\\n").trim(), labels: labels.slice(0, 100)};
+  return {text: texts.join("\\n").trim(), labels: labels.slice(0, 100), states};
 })()"""
 
 
@@ -1579,6 +1602,9 @@ class ChromeTarget:
             out.append(text)
         if labels:
             out.append("Actions: " + " | ".join(labels))
+        states = [f"{n}={v}" for n, v in (data.get("states") or []) if isinstance(n, str) and n]
+        if states:
+            out.append("States: " + " | ".join(states))
         return "\n".join(out)
 
     def _location(self) -> str:

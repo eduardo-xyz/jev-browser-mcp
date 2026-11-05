@@ -88,6 +88,8 @@ names it, so quote the label as the app shows it (`click the 'Dashboard 9/9' gro
 wheels the panel until it is in view, then the quoted-click rule clicks it. Controls covered at their
 centre by something else (the panel's own `Delete` under its confirm dialog) are not offered, so `click
 'Delete'` on a confirm dialog hits the dialog's button.
+`read()` ends with a `States:` line naming every visible switch, checkbox and radio with `=on`, `=off` or
+`=mixed` (named by its row), so a partial permission group can be recorded before anything is toggled.
 A click is refused as stale only
 when its own control or the document changed, not when the page scrolled or another field ticked.
 A page whose observe comes back with empty `text` after it has settled really
