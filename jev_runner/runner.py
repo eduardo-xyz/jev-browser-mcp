@@ -178,6 +178,7 @@ _CLICK_QUOTED = re.compile(
     r"\s*['\"\u201c\u2018]([^'\"\u201d\u2019]{1,60})['\"\u201d\u2019]", re.I)
 _NEGATED = re.compile(r"\b(?:not|never|don't|do not|without|avoid|skip|except|instead of)\b[^.;,]*$", re.I)  # to the next punctuation
 _QUOTED = re.compile(r"['\"\u201c\u2018]([^'\"\u201d\u2019]{2,60})['\"\u201d\u2019]")   # 'a title' or "a title" in a goal
+_HIDE_KEYBOARD = re.compile(r"\b(?:hide|dismiss|close)\b[^.;,]{0,20}\bkeyboard\b|ocultar[^.;,]{0,10}teclado", re.I)
 _PRESS_ESCAPE = re.compile(r"\bpress(?:\s+the)?\s*['\"\u201c\u2018]?(?:escape|esc)\b", re.I)  # "press Escape"
 # a clause the goal rules out ("Do not click Delete or Publish"), up to the next punctuation
 _NEG_CLAUSE = re.compile(r"\b(?:not|never|don't|do not|without|avoid|skip|except|instead of)\b([^.;,\n]*)", re.I)
@@ -953,6 +954,31 @@ class Runner:
                 return None  # the goal names it: allowed
         return act.get("label") or act.get("raw_label") or act.get("id")
 
+    def _keyboard_in_the_way(self, view: dict) -> dict | None:
+        """The on-screen keyboard's own dismiss step, without the model: when the goal says to hide
+        the keyboard and it is still up, or when the goal names a control to click that is not on
+        screen while the keyboard is (the IME covers the bottom of the form, where Continuar sits).
+        Seen: five "Hide the keyboard, then tap Continuar" goals ended BLOCKED at step 0; split
+        into "hide the keyboard" and "tap Continuar" each ran fine."""
+        hide = next((a for a in view.get("actions") or [] if a.get("kind") == "hide_keyboard"), None)
+        if hide is None:
+            return None
+        if self.history and self.history[-1].get("kind") == "hide_keyboard":
+            return None  # just done: the keyboard that is still up is not this step's problem
+        if _HIDE_KEYBOARD.search(self.goal or ""):
+            return hide
+        norm = lambda text: " ".join((text or "").split()).casefold()
+        on_screen = {norm(a.get("label")) for a in view["actions"] if a.get("kind") == "click"}
+        on_screen |= {norm(a.get("raw_label")) for a in view["actions"] if a.get("raw_label")}
+        done = {norm(h.get("action")) for h in self.history}
+        for m in _CLICK_QUOTED.finditer(self.goal or ""):
+            if _NEGATED.search((self.goal or "")[max(0, m.start() - 30):m.start()]):
+                continue
+            want = norm(m.group(1))
+            if want and want not in done and want not in on_screen:
+                return hide  # the named control is somewhere under the keyboard
+        return None
+
     def _key_named(self, view: dict) -> dict | None:
         """The Escape press when the goal says to press Escape and this run has not yet: a modal
         that offers no close control is dismissed by the runner itself, no model involved."""
@@ -972,7 +998,8 @@ class Runner:
                 _log.info("session=%s text model down: %d fill(s) withheld from the model",
                           self.session_id, len(view["actions"]) - len(kept))
             view = {**view, "actions": kept}
-        named = self._bring_named(view) or self._quoted_click(view) or self._key_named(view)
+        named = (self._bring_named(view) or self._quoted_click(view) or self._key_named(view)
+                 or self._keyboard_in_the_way(view))
         if named is not None:  # no model call: the goal names it outright
             _log.info("session=%s goal names the control: %s", self.session_id, named["label"])
             op = named["id"].upper()

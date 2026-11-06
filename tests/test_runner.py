@@ -944,3 +944,25 @@ def test_press_escape_in_the_goal_is_the_runners_own_key_press_and_the_model_nev
     t = FakeTarget([screen, screen])
     Runner("s2", t, "Close the dialog. Do not press Escape.", None, cfg, choose=choose).run()
     assert t.acted == []
+
+
+def _keyboard():
+    return {"id": "hide_keyboard", "kind": "hide_keyboard", "label": "Hide the on-screen keyboard"}
+
+
+def test_keyboard_in_the_way_is_the_runners_own_step(cfg):
+    """Seen on an Android bank form: "Hide the keyboard. Then tap 'Continuar'." ended BLOCKED at
+    step 0 five times (the IME covered Continuar); split into two goals each ran fine."""
+    pages = [page(fill("n1", "Monto"), _keyboard()), page(fill("n1", "Monto"), click("n2", "Continuar")), page()]
+    t = FakeTarget(pages)
+    out = Runner("s", t, "Hide the keyboard if open. Then tap 'Continuar' once.", None, cfg,
+                 choose=scripted_choose(["DONE"])).run()  # the model is only asked at the end
+    assert out["status"] == "done" and [a for a, _ in t.acted] == ["hide_keyboard", "n2"]
+    # a named control missing while the keyboard is up: hide it first, no "hide" in the goal needed
+    t = FakeTarget([page(fill("n1", "Monto"), _keyboard()), page(click("n2", "Continuar")), page()])
+    out = Runner("s", t, "Tap 'Continuar'.", None, cfg, choose=scripted_choose(["DONE"])).run()
+    assert out["status"] == "done" and [a for a, _ in t.acted] == ["hide_keyboard", "n2"]
+    # the keyboard still up right after hiding it is not re-hidden forever: the model decides
+    t = FakeTarget([page(fill("n1", "Monto"), _keyboard()), page(fill("n1", "Monto"), _keyboard()), page()])
+    out = Runner("s", t, "Hide the keyboard.", None, cfg, choose=scripted_choose(["DONE"])).run()
+    assert [a for a, _ in t.acted] == ["hide_keyboard"]
