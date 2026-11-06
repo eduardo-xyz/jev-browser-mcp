@@ -1,5 +1,6 @@
 """Runner: per tick observe -> scrub -> decide -> act -> record."""
 import hashlib
+import json
 import logging
 from collections import Counter
 import os
@@ -366,6 +367,15 @@ class Runner:
         _log.info("session=%s status=%s steps=%d model_calls=%d elapsed_ms=%d timing=%s",
                   self.session_id, self.status, len(self.history), self.model_calls,
                   self.elapsed_ms, {k: round(v) for k, v in self.timing.items()})
+        if self.status in ("blocked", "unverified", "max_steps"):
+            # what Jev was looking at when it gave up, for the log: the only record once the
+            # agent's result is gone (controls, weights, what was tried, the verifier's reason)
+            seen = {k: v for k, v in (getattr(self, "last_blocked", None) or {}).items()
+                    if k in ("controls", "text_chars", "weighed", "tried", "refused", "control", "disabled")}
+            if self._verify_reason:
+                seen["verify"] = self._verify_reason
+            _log.info("session=%s gave up: reason=%s saw=%s", self.session_id, self.reason,
+                      scrub({"text": json.dumps(seen, ensure_ascii=False)[:600]}, self.secrets)["text"])
         if self.status == "done":
             self._save_flow()
         return result.build(self)
