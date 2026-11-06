@@ -106,14 +106,29 @@ _CHILD_ORIGINS_JS = """(() => {
 # Resolve an observed node inside its frame, returning the element's centre in that frame's own
 # viewport coords, or null if it moved/vanished/is covered (so act can raise StalePage before any
 # input). Mirrors upstream's pre-input hit-test, but runs in the iframe's CDP session.
+# The point to click a node at: its centre, or, when something else sits on the centre (a toolbar
+# button overlapping the right half of a tab), the first of four more points on the node that a hit
+# test lands inside it. `loose` also accepts a hit that contains the node (a wrapper over a toggle).
+_HIT_POINT_JS = """((e, loose) => {
+  const r = e.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75]]) {
+    const x = r.x + r.width * fx, y = r.y + r.height * fy;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    let hit = document.elementFromPoint(x, y);
+    while (hit && hit.shadowRoot) { const d = hit.shadowRoot.elementFromPoint(x, y); if (!d || d === hit) break; hit = d; }
+    if (hit && (e === hit || e.contains(hit) || (loose && hit.contains(e)))) return {x, y};
+  }
+  return null;
+})"""
+
 _RESOLVE_IN_FRAME_FN = """(node => {
   const e = window.__jevFast && window.__jevFast.nodes.get(node);
   if (!e || !e.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) return null;
   try { if (!e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) return null; } catch (_) {}
   const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
   if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
-  if (!e.contains(document.elementFromPoint(x, y))) return null;
-  return {x, y};
+  return (""" + _HIT_POINT_JS + """)(e, false);
 })"""
 
 # Position of this page's own <iframe> for `origin`, in the TOP viewport. An OOPIF's element lives
@@ -852,7 +867,9 @@ _OFFSCREEN_JS = """(() => {
   for (const sc of document.querySelectorAll('div,section,main,ul,ol,aside,nav,form')) {
     if (s >= 4 || out.length >= 300) break;
     const cs = getComputedStyle(sc);
-    if (!/(auto|scroll)/.test(cs.overflowY) || sc.scrollHeight <= sc.clientHeight + 20 || !vis(sc)) continue;
+    const tall = /(auto|scroll)/.test(cs.overflowY) && sc.scrollHeight > sc.clientHeight + 20;
+    const wide = /(auto|scroll)/.test(cs.overflowX) && sc.scrollWidth > sc.clientWidth + 20;  // a table wider than its box
+    if (!(tall || wide) || !vis(sc)) continue;
     const cr = sc.getBoundingClientRect();
     const bx = Math.max(0, cr.left), by = Math.max(0, cr.top), bx2 = Math.min(innerWidth, cr.right), by2 = Math.min(innerHeight, cr.bottom);
     if (bx2 - bx < 120 || by2 - by < 120) continue;
@@ -903,8 +920,7 @@ _COVERED_FN = """((ids) => {
     if (!r.width || !r.height) continue;
     const x = r.x + r.width / 2, y = r.y + r.height / 2;
     if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
-    const hit = document.elementFromPoint(x, y);
-    if (hit && !e.contains(hit) && !hit.contains(e)) out.push(id);
+    if (!(""" + _HIT_POINT_JS + """)(e, true)) out.push(id);  // no point on it is reachable
   }
   return out;
 })"""
@@ -927,8 +943,7 @@ _RECT_FN = """(node => {
     if (pr.right <= 0 || pr.bottom <= 0 || pr.left >= innerWidth || pr.top >= innerHeight) continue;
     bx = Math.max(bx, pr.left); by = Math.max(by, pr.top); bx2 = Math.min(bx2, pr.right); by2 = Math.min(by2, pr.bottom);
   }
-  const hitEl = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-  const hit = !!hitEl && (e.contains(hitEl) || hitEl.contains(e));  // a sticky footer over the node: not there yet
+  const hit = !!(""" + _HIT_POINT_JS + """)(e, true);  // a sticky footer over the node: not there yet
   return {x: r.x, y: r.y, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight,
           bx, by, bw: Math.max(0, bx2 - bx), bh: Math.max(0, by2 - by), hit};
 })"""

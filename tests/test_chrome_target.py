@@ -1585,3 +1585,21 @@ def test_keepalive_heartbeats_the_claimed_tab():
     finally:
         chrome_mod.tab_groups.activity = orig
     assert pinged == [["TAB1"]]   # the ungrouped target pings nothing
+
+
+def test_hit_test_samples_more_than_the_centre():
+    """A toolbar button sat on the right half of a builder tab: the tab's centre hit the button, so
+    the tab was dropped as covered and the model said BLOCKED. Resolve, cover and rect checks all
+    try four more points on the node before calling it covered."""
+    for js in (chrome_mod._RESOLVE_IN_FRAME_FN, chrome_mod._COVERED_FN, chrome_mod._RECT_FN):
+        assert "[[0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75]]" in js
+    assert ")(e, false)" in chrome_mod._RESOLVE_IN_FRAME_FN  # a click lands on the node itself
+    assert ")(e, true)" in chrome_mod._COVERED_FN and ")(e, true)" in chrome_mod._RECT_FN
+
+
+def test_offscreen_offers_controls_beyond_a_sideways_scrolling_panel():
+    """A workflow table wider than its box keeps its row-actions column off to the right: the
+    buttons are outside the frame viewport, so no snapshot offers them. The list rule now takes a
+    panel that scrolls on either axis, and the pan loop already wheels sideways."""
+    js = chrome_mod._OFFSCREEN_JS
+    assert "sc.scrollWidth > sc.clientWidth + 20" in js and "if (!(tall || wide) || !vis(sc)) continue;" in js

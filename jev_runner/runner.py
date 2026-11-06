@@ -217,10 +217,14 @@ class _LoggingClient:
         self._inner = inner
 
     def post(self, *args, **kwargs):
-        response = self._inner.post(*args, **kwargs)
+        url = str(args[0] if args else kwargs.get("url") or "")
+        host = re.sub(r"^https?://([^/]+).*$", r"\1", url) or "?"
+        try:
+            response = self._inner.post(*args, **kwargs)
+        except Exception as e:  # a connection failure names its host too ("Model connection failed" alone did not)
+            _log.warning("model provider unreachable at %s: %s", host, (str(e) or type(e).__name__)[:200])
+            raise
         if response.is_error:
-            url = str(args[0] if args else kwargs.get("url") or "")
-            host = re.sub(r"^https?://([^/]+).*$", r"\1", url) or "?"
             _log.warning("model provider HTTP %s at %s: %s", response.status_code, host, response.text[:300])
         return response
 
