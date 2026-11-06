@@ -1172,6 +1172,12 @@ class Runner:
         if choice == "DONE":
             if self.executed_money and self.receipt is None:
                 self._save_receipt(page)
+            if decision.get("shortcut") in ("once", "named_done"):
+                # The runner itself did every click the goal named and ended the run: that is the
+                # goal, by construction. Seen: "Click 'Transferir' once. Nothing else." came back
+                # "unverified: not a completed transfer" from the text model and was retried.
+                self.verified, self._verify_reason = True, "runner_named"
+                raise _Stop("done", decision.get("reason"))
             if self._check(page) is False:
                 self.last_blocked = self._blocked_detail(decision, page)  # what Jev called done
                 raise _Stop("unverified", self._verify_reason or "goal_not_visible")

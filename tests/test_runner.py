@@ -966,3 +966,15 @@ def test_keyboard_in_the_way_is_the_runners_own_step(cfg):
     t = FakeTarget([page(fill("n1", "Monto"), _keyboard()), page(fill("n1", "Monto"), _keyboard()), page()])
     out = Runner("s", t, "Hide the keyboard.", None, cfg, choose=scripted_choose(["DONE"])).run()
     assert [a for a, _ in t.acted] == ["hide_keyboard"]
+
+
+def test_a_done_the_runner_decided_is_not_second_guessed_by_the_verifier(cfg):
+    """"Click 'Transferir' once. Nothing else." was clicked by the runner, ended by the once rule,
+    then the text-model verifier judged the screen against an imagined end state ("not a
+    completed transfer") and the run came back unverified — and was retried."""
+    t = FakeTarget([page(click("n1", "Transferir")), page(click("n9", "A SINPE Móvil"))])
+    out = Runner("s", t, "Click the 'Transferir' button once. Nothing else.", None, cfg,
+                 choose=scripted_choose(["BLOCKED"]),
+                 verify=lambda goal, page, history: (False, "not a completed transfer")).run()
+    assert (out["status"], out.get("reason")) == ("done", None) and t.acted == [("n1", None)]
+    assert out["verified"] is True
