@@ -1612,3 +1612,11 @@ def test_same_page_lets_the_app_keep_its_own_query():
     assert not same("https://x.test/a/workflows?listTab=all", "https://x.test/a/workflows?folder=1")
     assert same("https://x.test/a/workflows?folder=1", "https://x.test/a/workflows?folder=1")
     assert not same("https://x.test/a/dashboard", "https://x.test/a/workflows")
+
+
+def test_offscreen_offers_text_fields_beyond_a_panels_fold():
+    """An action panel's "Subject" input 300 px below the panel's fold was never offered: the list
+    rule only looked at buttons and toggles. Text fields are offered by their accessible name."""
+    js = chrome_mod._OFFSCREEN_JS
+    assert 'summary,input,textarea,[contenteditable="true"],[role="textbox"]' in js
+    assert "fieldName(e)" in js and "e.getAttribute('placeholder')" in js

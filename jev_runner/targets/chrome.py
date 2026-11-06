@@ -862,7 +862,9 @@ _OFFSCREEN_JS = """(() => {
   // Controls beyond the visible box of a panel that scrolls inside the page (a settings drawer's
   // 41 permission groups, a long list): the same offer, wheeled over the panel. The runner keeps
   // these only when the goal names them (trim_bring_into_view), so a long list adds no noise.
-  const LISTCTRL = CONTROL + ',[role="switch"],[role="checkbox"],[role="treeitem"],summary';
+  // text fields too: a settings panel's "Subject" input 300 px below its fold was never offered
+  const LISTCTRL = CONTROL + ',[role="switch"],[role="checkbox"],[role="treeitem"],summary,input,textarea,[contenteditable="true"],[role="textbox"]';
+  const fieldName = e => { const l = e.labels && e.labels[0]; return e.getAttribute('aria-label') || e.getAttribute('placeholder') || (l && l.innerText) || ''; };
   let s = 0;
   for (const sc of document.querySelectorAll('div,section,main,ul,ol,aside,nav,form')) {
     if (s >= 4 || out.length >= 300) break;
@@ -886,7 +888,8 @@ _OFFSCREEN_JS = """(() => {
         if (hit && (e.contains(hit) || hit.contains(e))) continue;
       }
       const role = e.getAttribute('role') || '';
-      let label = clean(e.getAttribute('aria-label') || e.innerText || '').slice(0, 40);
+      if (e.matches('input,textarea') && /^(hidden|submit|button|checkbox|radio|file|image|reset)$/.test(e.type || '')) continue;
+      let label = clean(e.matches('input,textarea,[contenteditable="true"],[role="textbox"]') ? fieldName(e) : (e.getAttribute('aria-label') || e.innerText || '')).slice(0, 40);
       if (/^(switch|checkbox|radio)$/.test(role)) {  // a toggle: its role and row, as on screen
         const own = clean(e.innerText || '');
         let row = '';
