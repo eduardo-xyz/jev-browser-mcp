@@ -1035,15 +1035,19 @@ def loaded(b) -> bool:
 
 
 def _same_page(a: str, b: str) -> bool:
-    """Same document: scheme, host, path (ignoring a trailing slash) and query; fragments differ
-    freely (a SPA router may add one)."""
-    def key(u):
+    """Is the tab at `a` showing the page asked for as `b`: same scheme, host and path (ignoring a
+    trailing slash); fragments differ freely (a SPA router may add one), and so does the tab's
+    query when the asked-for URL has none (an app adds its own state, "?listTab=all", to the
+    page it was asked for: reloading it would close the menu the last run opened and reset the
+    list's filter). A query in `b` must match."""
+    def key(u, query):
         try:
             p = urlsplit(u or "")
         except ValueError:
             return None
-        return (p.scheme.lower(), p.netloc.lower(), (p.path or "/").rstrip("/") or "/", p.query)
-    return key(a) is not None and key(a) == key(b)
+        return (p.scheme.lower(), p.netloc.lower(), (p.path or "/").rstrip("/") or "/", p.query if query else "")
+    want = urlsplit(b or "").query if b else ""
+    return key(a, want) is not None and key(a, want) == key(b, want)
 
 
 def _wait_loaded(b, timeout: float = LOAD_TIMEOUT) -> bool:

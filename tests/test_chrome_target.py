@@ -1603,3 +1603,12 @@ def test_offscreen_offers_controls_beyond_a_sideways_scrolling_panel():
     panel that scrolls on either axis, and the pan loop already wheels sideways."""
     js = chrome_mod._OFFSCREEN_JS
     assert "sc.scrollWidth > sc.clientWidth + 20" in js and "if (!(tall || wide) || !vis(sc)) continue;" in js
+
+
+def test_same_page_lets_the_app_keep_its_own_query():
+    same = chrome_mod._same_page
+    assert same("https://x.test/a/workflows?listTab=all", "https://x.test/a/workflows")  # the app's own state
+    assert same("https://x.test/a/workflows/#/x", "https://x.test/a/workflows")
+    assert not same("https://x.test/a/workflows?listTab=all", "https://x.test/a/workflows?folder=1")
+    assert same("https://x.test/a/workflows?folder=1", "https://x.test/a/workflows?folder=1")
+    assert not same("https://x.test/a/dashboard", "https://x.test/a/workflows")
