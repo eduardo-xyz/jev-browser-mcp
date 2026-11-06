@@ -185,8 +185,11 @@ _NEG_CLAUSE = re.compile(r"\b(?:not|never|don't|do not|without|avoid|skip|except
 # a value the goal spells out for a field: a typing verb, then a quoted string or a bare number
 _TYPE_QUOTED = re.compile(
     r"\b(?:type|enter|write|input|put|fill(?:\s+in)?|set(?:\s+it)?|replace(?:\s+it)?|change(?:\s+it)?|search(?:\s+for)?|look\s+up)\b"
-    r"(?:\s+(?:in|into|the|value|text|number|field|with|as|to|by))*"
-    r"\s*(?:['\"\u201c\u2018]([^'\"\u201d\u2019]{1,200})['\"\u201d\u2019]|(-?\d(?:[\d.,:/-]{0,29}\d)?)(?![\w%]))", re.I)
+    r"(?:\s+(?:in|into|the|value|text|number|field|with|as|to|by|exactly|just|only|precisely))*"
+    r"\s*(?:['\"\u201c\u2018]([^'\"\u201d\u2019]{1,200})['\"\u201d\u2019]|(-?\d(?:[\d.,:/-]{0,29}\d)?)(?![\w%]))"
+    # ...optionally "into the <Field> field": the value's own field, so several values in one goal
+    # each find their field without the text model
+    r"(?:\s+(?:in|into|to|for|on)\s+(?:the\s+)?['\"\u201c\u2018]?([^'\"\u201d\u2019.,;\n]{1,40}?)['\"\u201d\u2019]?\s+(?:field|box|input|textbox|area))?", re.I)
 
 
 def trim_bring_into_view(actions: list[dict], goal: str, limit: int = BRING_LIMIT) -> list[dict]:
@@ -1301,23 +1304,34 @@ class Runner:
             return True
         return any(k in self._secret_fields for k in self._field_keys(action))
 
-    def _goal_value(self) -> str | None:
+    def _goal_value(self, action: dict | None = None) -> str | None:
         """The value the goal spells out for the next field ("select all and type 3", "enter
-        'Follow-up'"): the first such phrase not yet typed in this run, when it is the only one
-        left. The text model is for values the goal leaves to be worked out; a value written in
-        the goal needs no model (seen: a typing step stopped on a text-model HTTP 402 although the
-        goal said exactly what to type). Reached only after the secret and money guards."""
-        values = []
+        'Follow-up'"): the one written for this field by name ("type '500' into the Monto field"),
+        else the first such phrase not yet typed in this run, when it is the only one left. The
+        text model is for values the goal leaves to be worked out; a value written in the goal
+        needs no model (seen: a typing step stopped on a text-model HTTP 402 although the goal
+        said exactly what to type; three values for three named fields went to the text model and
+        came back wrong). Reached only after the secret and money guards."""
+        norm = lambda text: " ".join((text or "").split()).casefold()
+        label = norm(action.get("label")) if action else ""
+        values, named = [], []
         for m in _TYPE_QUOTED.finditer(self.goal or ""):
             if _NEGATED.search((self.goal or "")[max(0, m.start() - 30):m.start()]):
                 continue
             value = (m.group(1) if m.group(1) is not None else m.group(2) or "").strip()
-            if value and value not in self._goal_typed and value not in values:
+            if not value or value in self._goal_typed:
+                continue
+            field = norm(m.group(3))
+            if field and label and (field in label or label in field):
+                named.append(value)
+            if value not in values:
                 values.append(value)
+        if len(named) == 1:
+            return named[0]
         return values[0] if len(values) == 1 else None
 
     def _model_text(self, action: dict, page: dict) -> str:
-        spelled = self._goal_value()
+        spelled = self._goal_value(action)
         if spelled is not None:
             _log.info("session=%s goal spells out the value to type: %d chars", self.session_id, len(spelled))
             self._goal_typed.add(spelled)

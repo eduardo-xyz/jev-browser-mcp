@@ -972,9 +972,27 @@ def test_a_done_the_runner_decided_is_not_second_guessed_by_the_verifier(cfg):
     """"Click 'Transferir' once. Nothing else." was clicked by the runner, ended by the once rule,
     then the text-model verifier judged the screen against an imagined end state ("not a
     completed transfer") and the run came back unverified — and was retried."""
-    t = FakeTarget([page(click("n1", "Transferir")), page(click("n9", "A SINPE Móvil"))])
-    out = Runner("s", t, "Click the 'Transferir' button once. Nothing else.", None, cfg,
-                 choose=scripted_choose(["BLOCKED"]),
-                 verify=lambda goal, page, history: (False, "not a completed transfer")).run()
+    t = FakeTarget([page(click("n1", "Continuar")), page(click("n9", "A SINPE Móvil"))])  # (a money label would pause)
+    r = Runner("s", t, "Click the 'Continuar' button once. Nothing else.", None, cfg,
+               choose=scripted_choose(["BLOCKED"]),
+               verify=lambda goal, page, history: (False, "not a completed transfer"))
+    out = r.run()
+    assert r.verified is True
     assert (out["status"], out.get("reason")) == ("done", None) and t.acted == [("n1", None)]
-    assert out["verified"] is True
+
+
+def test_values_spelled_out_for_named_fields_find_their_fields_without_the_text_model(cfg):
+    """Seen: "type '8888' into the phone field. Type '500' into the Monto field. Type 'Consulta'
+    into the Descripción field" went to the text model (three values, which is which?) and came
+    back unverified with the fields empty; one value per goal then worked. A value written for a
+    field by name is typed into that field."""
+    def boom(ctx):
+        raise AssertionError("the text model must not be asked for values written in the goal")
+    t = FakeTarget([page(fill("n1", "Número de celular"), fill("n2", "Monto"), fill("n3", "Descripción (opcional)")),
+                    page(fill("n1", "Número de celular"), fill("n3", "Descripción (opcional)")),
+                    page(fill("n1", "Número de celular")), page()])
+    goal = ("Type exactly '88887777' into the Número de celular field. Type '500' into the Monto field. "
+            "Type 'Consulta Papillo' into the 'Descripción' box. Do not tap Continuar.")
+    out = Runner("s", t, goal, None, cfg, choose=scripted_choose(["n2", "n3", "n1", "DONE"]), field_text=boom).run()
+    assert out["status"] == "done"
+    assert sorted(t.acted) == [("n1", "88887777"), ("n2", "500"), ("n3", "Consulta Papillo")]
