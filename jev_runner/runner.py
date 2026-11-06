@@ -113,6 +113,11 @@ def history_entry(action: dict, page: dict, text: str | None, secret_patterns: l
     }
 
 
+class _NoText(Exception):
+    """The text model (typed values) is unreachable or refusing: the fill is given up and the
+    run goes on with the page's other controls."""
+
+
 class _Stop(Exception):
     def __init__(self, status: str, reason: str | None = None):
         self.status, self.reason = status, reason
@@ -282,6 +287,7 @@ class Runner:
         self.last_blocked: dict | None = None  # what Jev was looking at when it gave up (result detail)
         self.last_error: dict | None = None  # the raw error behind target_unreachable (result detail)
         self._goal_typed: set = set()  # values spelled out in the goal that this run already typed
+        self._text_down: str | None = None  # the text model's failure, once it has failed this run
         self._quoted_as: dict = {}  # a short quoted name -> the full label it was clicked under
         self._load_waited = 0.0  # seconds spent waiting on a loading page without asking Jev
         self._load_clear = LOAD_CLEAR_READS  # clear reads since the last loading one (none seen yet)
@@ -563,6 +569,8 @@ class Runner:
                 self._replay(*replay, page)
             else:
                 self._act_and_record(decision, page)
+        except _NoText:
+            self.page = {}  # nothing happened; the next read decides without the fill
         except StalePage as e:
             self._stale += 1
             self.page = {}
@@ -922,6 +930,12 @@ class Runner:
 
     def _decide(self, view: dict) -> dict:
         view = self._drop_ruled_out(view)
+        if self._text_down and self._goal_value() is None:
+            kept = [a for a in view["actions"] if a.get("kind") != "fill"]
+            if len(kept) < len(view["actions"]):
+                _log.info("session=%s text model down: %d fill(s) withheld from the model",
+                          self.session_id, len(view["actions"]) - len(kept))
+            view = {**view, "actions": kept}
         named = self._bring_named(view) or self._quoted_click(view) or self._key_named(view)
         if named is not None:  # no model call: the goal names it outright
             _log.info("session=%s goal names the control: %s", self.session_id, named["label"])
@@ -1103,6 +1117,9 @@ class Runner:
             if self._check(page) is True:  # Jev gave up, but the goal is visibly met
                 raise _Stop("done", "verified_after_blocked")
             self.last_blocked = self._blocked_detail(decision, page)
+            if self._text_down:  # nothing to click towards the goal once typing was taken away
+                self.last_blocked["text_model"] = self._text_down
+                raise _Stop("blocked", "text_model_unavailable")
             raise _Stop("blocked", "jev_blocked")
         action = next((a for a in page["actions"] if a["id"] == choice), None)
         if action is None:
@@ -1240,6 +1257,15 @@ class Runner:
             text, _ = self._timed("text_ms", self._field_text, ctx)
         except ValueError:
             raise _Stop("blocked", "missing_value")
+        except RuntimeError as e:
+            # The text provider is down or refusing (a connection failure, an HTTP 402 on its
+            # account): a value nobody can produce must not end the run while the page has other
+            # controls. The fill is dropped from the next view; the run goes on by clicking.
+            self._text_down = (str(e) or type(e).__name__)[:160]
+            _log.warning("session=%s text model unavailable (%s): giving up the fill %r, "
+                         "typing is off for the rest of this run", self.session_id,
+                         self._text_down, action.get("label"))
+            raise _NoText() from None
         return text
 
     def _execute(self, action: dict, page: dict, text: str | None, *,

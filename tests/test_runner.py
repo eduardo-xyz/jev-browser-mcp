@@ -171,6 +171,33 @@ def test_missing_value_blocks(cfg):
     assert (out["status"], out["reason"]) == ("blocked", "missing_value")
 
 
+def test_text_model_down_drops_fills_and_the_run_goes_on_by_clicking(cfg):
+    """The text provider failing (HTTP 402 on its account) must not end a run whose goal can be
+    reached by clicking: the fill is given up, withheld from the next view, and the run goes on."""
+    seen = []
+    def boom(ctx):
+        raise RuntimeError("Model provider returned HTTP 402; no action executed.")
+    pages = [page(fill("n1", "Search"), click("n2", "Folder A")), page(click("n3", "Round Robin")), page()]
+    t = FakeTarget(pages)
+    out = Runner("s", t, "open the folder that holds Round Robin", None, cfg,
+                 choose=scripted_choose(["n1", "n2", "n3", "DONE"], spy=seen), field_text=boom).run()
+    assert (out["status"], out.get("reason")) == ("done", None)
+    # the second decision saw the same page without the Search fill; nothing was typed
+    assert [a["id"] for a in json.loads(seen[1])["actions"]] == ["n2"]
+    assert [a for a, _ in t.acted] == ["n2", "n3"]
+
+
+def test_text_model_down_with_nothing_to_click_blocks_with_its_cause(cfg):
+    def boom(ctx):
+        raise RuntimeError("Model provider returned HTTP 402; no action executed.")
+    t = FakeTarget([page(fill("n1", "Search"))])
+    out = Runner("s", t, "find the workflow", None, cfg,
+                 choose=scripted_choose(["n1", "BLOCKED"]), field_text=boom).run()
+    assert (out["status"], out["reason"]) == ("blocked", "text_model_unavailable")
+    assert out["detail"]["text_model"].startswith("Model provider returned HTTP 402")
+    assert "402" in out["hint"] and t.acted == []
+
+
 def test_device_disconnect_reports_error_keeps_runner(cfg):
     t = FakeTarget([page(click("n1", "X"))], raise_on_act=DeviceDisconnected())
     r = Runner("s", t, "g", None, cfg, choose=scripted_choose(["n1"]))

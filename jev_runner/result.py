@@ -22,6 +22,12 @@ HINTS = {
                           "control the goal does not name (`detail.refused`), which the runner refused. "
                           "If that further step was wanted, name it in the goal; otherwise this run did "
                           "what was asked. `read` to confirm the state."),
+    "text_model_unavailable": ("The text model that produces typed values (TEXT_MODEL_* in jevd's env) "
+                               "failed (`detail.text_model`, e.g. HTTP 402 = that account has no balance). "
+                               "Typing was switched off for the run and the goal could not be reached by "
+                               "clicking alone. Put the exact text to type in the goal (\"type 'Round "
+                               "Robin'\": a spelled-out value never needs the text model), or have the "
+                               "text model's account fixed. Decisions use the main model and still work."),
     "control_disabled": ("The control the goal names is on screen but the app has disabled it (greyed out, "
                          "aria-disabled): a click would do nothing. Don't retry the same click; `read` the "
                          "screen (a disabled toggle shows `(disabled)` on the States line), report what the "
@@ -47,7 +53,8 @@ def build(runner) -> dict:
         out["detail"] = runner.last_error  # the raw connection error, for bug reports
     if runner.reason == "stale_page" and getattr(runner, "last_stale", None):
         out["detail"] = runner.last_stale  # which action was refused and why (for bug reports)
-    if (runner.reason in ("jev_blocked", "no_progress", "control_disabled", "named_clicks_done")
+    if (runner.reason in ("jev_blocked", "no_progress", "control_disabled", "named_clicks_done",
+                          "text_model_unavailable")
             or runner.status == "unverified") \
             and getattr(runner, "last_blocked", None):
         out["detail"] = runner.last_blocked  # what Jev saw when it gave up or called done
