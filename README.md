@@ -175,6 +175,7 @@ agent's transcript on disk. Two safer paths, both built in:
   ```sh
   python -m jev_runner.vault set app.example.com        # prompts; nothing on the command line
   python -m jev_runner.vault set-totp app.example.com   # base32 seed or otpauth:// URI
+  python -m jev_runner.vault set-user app.example.com   # email/username typed on that site's sign-in page
   python -m jev_runner.vault check app.example.com      # what is stored (never the values)
   python -m jev_runner.vault code app.example.com       # current code, to compare with your app
   ```

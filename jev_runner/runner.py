@@ -10,7 +10,7 @@ from jev_ultrafast import model
 
 from . import result
 from . import signin
-from .vault import field_kind as vault_field_kind, scope_of as vault_scope
+from .vault import field_kind as vault_field_kind, is_identity_field, scope_of as vault_scope
 from . import verify as verify_mod
 from .config import Config
 from .flows import (
@@ -501,6 +501,38 @@ class Runner:
         self._execute(action, page, value, verify=True, secret=True)
         if len(self.history) > n:
             self.history[-1]["value_source"] = "authenticator" if kind == "totp" else "keychain"
+        return True
+
+    def _fill_username_from_vault(self, action: dict, page: dict) -> bool:
+        """Type the stored sign-in identifier (email / username) into an identity field of a
+        sign-in page, when the vault has one for the site. Looked up by the page's host, then —
+        on an identity provider's page (accounts.google.com) or any login URL — by the host the
+        run started on, so one entry covers a site and the provider it signs in through. Only on
+        sign-in pages: an email field elsewhere (a contact form) is the goal's or the model's."""
+        if self._vault is None or getattr(self.target, "kind", None) != "chrome":
+            return False
+        if not is_identity_field(action) or not signin.is_signin_page(page):
+            return False
+        url = page.get("url") or ""
+        scopes = [vault_scope("chrome", url)]
+        if signin.is_login_url(url) and self.start:
+            scopes.append(vault_scope("chrome", self.start))
+        value = None
+        for scope in scopes:
+            if not scope:
+                continue
+            try:
+                value = self._vault.username(scope)
+            except Exception:
+                value = None
+            if value:
+                break
+        if not value:
+            return False
+        n = len(self.history)
+        self._execute(action, page, value, verify=True, secret=True)  # kept out of results and logs
+        if len(self.history) > n:
+            self.history[-1]["value_source"] = "keychain"
         return True
 
     def _pending_for(self, kind: str, action: dict, page: dict, **extra) -> dict:
@@ -1191,6 +1223,8 @@ class Runner:
 
     def _dispatch(self, action: dict, page: dict, text_for):
         """Shared by Jev-chosen and replayed actions: secret, money and destructive guards first."""
+        if self._fill_username_from_vault(action, page):
+            return
         if self._is_secret(action):
             if self._fill_from_vault(action, page):
                 return

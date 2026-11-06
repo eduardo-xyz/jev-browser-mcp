@@ -8,13 +8,15 @@ package), so a stored value can only ever be typed into a field on that site or 
 Keychain layout (macOS `security` tool, the login keychain):
   service "jev-runner"       account <scope>   -> the password
   service "jev-runner-totp"  account <scope>   -> a base32 seed or an otpauth:// URI
+  service "jev-runner-user"  account <scope>   -> the sign-in identifier (email / username)
 
 CLI (values are prompted, never put on a command line):
   python -m jev_runner.vault set app.example.com        # store a password for that site
   python -m jev_runner.vault set-totp app.example.com   # store its authenticator seed
+  python -m jev_runner.vault set-user app.example.com   # store the email/username to sign in with
   python -m jev_runner.vault check app.example.com      # what is stored (never the values)
   python -m jev_runner.vault code app.example.com       # the current 6-digit code, to compare
-  python -m jev_runner.vault remove[-totp] <scope>
+  python -m jev_runner.vault remove[-totp|-user] <scope>
 """
 from __future__ import annotations
 
@@ -30,6 +32,9 @@ from urllib.parse import parse_qs, urlsplit
 
 SERVICE = "jev-runner"
 TOTP_SERVICE = "jev-runner-totp"
+USER_SERVICE = "jev-runner-user"
+_ID_WORDS = re.compile(r"\b(e-?mail|correo|user ?name|usuario|username|user id|login id|identifier|"
+                       r"account|phone|telefono|user)\b", re.I)
 _OTP_WORDS = re.compile(r"\b(otp|code|codigo|token|verification|verificacion|2fa|one.?time|"
                         r"authenticator|autenticador|totp)\b", re.I)
 _NOT_FOUND = 44  # security: "The specified item could not be found in the keychain."
@@ -59,6 +64,19 @@ def field_kind(action: dict) -> str:
     tail = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", tail)
     text = " ".join(str(action.get(k) or "") for k in ("label", "hint")) + " " + tail
     return "totp" if _OTP_WORDS.search(normalize(text)) else "password"
+
+
+def is_identity_field(action: dict) -> bool:
+    """A sign-in identifier field (email / username / phone): a plain text field whose label, hint
+    or id says so. Never a password or code field."""
+    if action.get("kind") != "fill" or action.get("password"):
+        return False
+    from .guards import normalize
+    tail = re.split(r"[/:]", action.get("resource_id") or "")[-1]
+    tail = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", tail)
+    text = " ".join(str(action.get(k) or "") for k in ("label", "hint")) + " " + tail
+    text = normalize(text)
+    return bool(_ID_WORDS.search(text)) and not _OTP_WORDS.search(text) and "password" not in text
 
 
 # --- TOTP (RFC 6238), no third-party dependency -------------------------------------------------
@@ -124,9 +142,13 @@ class Keychain:
         seed = self._get(TOTP_SERVICE, scope)
         return totp_code(seed) if seed else None
 
+    def username(self, scope: str) -> str | None:
+        return self._get(USER_SERVICE, scope)
+
     def has(self, scope: str) -> dict:
         return {"password": self._get(SERVICE, scope) is not None,
-                "totp": self._get(TOTP_SERVICE, scope) is not None}
+                "totp": self._get(TOTP_SERVICE, scope) is not None,
+                "username": self._get(USER_SERVICE, scope) is not None}
 
     def put(self, service: str, account: str, value: str) -> None:
         """Store through `security -i` (commands on stdin): the value never appears in a process
@@ -162,7 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     import getpass
 
     p = argparse.ArgumentParser(prog="python -m jev_runner.vault", description=__doc__.split("\n\n")[0])
-    p.add_argument("command", choices=["set", "set-totp", "check", "code", "remove", "remove-totp"])
+    p.add_argument("command", choices=["set", "set-totp", "set-user", "check", "code", "remove",
+                                       "remove-totp", "remove-user"])
     p.add_argument("scope", help="site host (app.example.com) or Android package (com.whatsapp)")
     a = p.parse_args(argv)
     kc = Keychain()
@@ -181,9 +204,14 @@ def main(argv: list[str] | None = None) -> int:
             kc.put(TOTP_SERVICE, scope, seed.strip())
             print(f"Stored an authenticator seed for {scope}. Current code: {totp_code(seed)} "
                   "(compare it with your authenticator app).")
+        elif a.command == "set-user":
+            user = input(f"Email or username to sign in to {scope} with: ").strip()
+            kc.put(USER_SERVICE, scope, user)
+            print(f"Stored a sign-in identifier for {scope}.")
         elif a.command == "check":
             h = kc.has(scope)
-            print(f"{scope}: password {'yes' if h['password'] else 'no'}, "
+            print(f"{scope}: username {'yes' if h['username'] else 'no'}, "
+                  f"password {'yes' if h['password'] else 'no'}, "
                   f"authenticator {'yes' if h['totp'] else 'no'}")
         elif a.command == "code":
             code = kc.totp(scope)
@@ -192,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
             print("Removed." if kc.remove(SERVICE, scope) else "Nothing stored.")
         elif a.command == "remove-totp":
             print("Removed." if kc.remove(TOTP_SERVICE, scope) else "Nothing stored.")
+        elif a.command == "remove-user":
+            print("Removed." if kc.remove(USER_SERVICE, scope) else "Nothing stored.")
     except VaultError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

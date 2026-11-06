@@ -63,7 +63,9 @@ def test_keychain_reads_password_and_generates_code():
     assert kc.password("other.com") is None
     assert kc.totp("app.x.com").isdigit() and len(kc.totp("app.x.com")) == 6
     assert kc.totp("other.com") is None
-    assert kc.has("app.x.com") == {"password": True, "totp": True}
+    assert kc.has("app.x.com") == {"password": True, "totp": True, "username": False}
+    sec.entries[("jev-runner-user", "app.x.com")] = "eo@x.com"
+    assert kc.username("app.x.com") == "eo@x.com" and kc.has("app.x.com")["username"] is True
 
 
 def test_keychain_is_inert_off_macos_or_when_disabled():
@@ -88,8 +90,12 @@ def test_keychain_put_keeps_the_value_off_the_command_line():
 # --- the runner: stored secrets are typed, never seen ---
 
 class FakeVault:
-    def __init__(self, password=None, totp=None):
-        self._p, self._t, self.asked = password, totp, []
+    def __init__(self, password=None, totp=None, username=None):
+        self._p, self._t, self._u, self.asked = password, totp, username, []
+
+    def username(self, scope):
+        self.asked.append(("username", scope))
+        return self._u.get(scope) if isinstance(self._u, dict) else self._u
 
     def password(self, scope):
         self.asked.append(("password", scope))
@@ -147,3 +153,50 @@ def test_resume_typed_by_human_continues_and_hides_what_the_field_shows(cfg):
     assert out["status"] == "done"
     assert r.history[0]["text"] == "•••" and r.history[0]["value_source"] == "human"
     assert "987654" not in json.dumps(out) and "987654" not in json.dumps(r.history)
+
+
+def test_identity_fields():
+    assert vault.is_identity_field(fill("n1", "Email"))
+    assert vault.is_identity_field(fill("n1", "Correo electrónico"))
+    assert vault.is_identity_field({"id": "n1", "kind": "fill", "label": "", "resource_id": "com.x:id/userName"})
+    assert not vault.is_identity_field(_pw_field())
+    assert not vault.is_identity_field(fill("n1", "Verification code"))
+    assert not vault.is_identity_field(fill("n1", "Subject"))
+    assert not vault.is_identity_field(click("n1", "Email"))
+
+
+def test_stored_username_is_typed_on_a_signin_page_without_the_text_model(cfg):
+    class Chrome(FakeTarget):
+        kind = "chrome"
+    login = page(fill("e1", "Email"), _pw_field(), url="https://app.x.com/login", text="Sign in\nForgot password?")
+    t = Chrome([login, page(_pw_field(), url="https://app.x.com/login", text="Sign in"), page(click("b1", "Continue")), page()])
+    v = FakeVault(password="s3cret!", username="eo@x.com")
+    r = Runner("s1", t, "sign in", None, cfg, vault=v, choose=scripted_choose(["e1", "n1", "b1", "DONE"]),
+               field_text=lambda ctx: pytest.fail("a stored identifier never needs the text model"))
+    out = r.run()
+    assert out["status"] == "done" and t.acted[0] == ("e1", "eo@x.com") and t.acted[1] == ("n1", "s3cret!")
+    assert v.asked[0] == ("username", "app.x.com")
+    assert "eo@x.com" not in json.dumps(out) and "eo@x.com" not in json.dumps(r.history)
+    assert r.history[0]["value_source"] == "keychain"
+
+
+def test_identity_provider_page_uses_the_start_hosts_username(cfg):
+    class Chrome(FakeTarget):
+        kind = "chrome"
+    chooser = page(fill("e1", "Email or phone"), url="https://accounts.google.com/v3/signin/identifier", text="Sign in")
+    t = Chrome([chooser, page()])
+    v = FakeVault(username={"app.x.com": "eo@x.com"})
+    r = Runner("s1", t, "sign in with Google", None, cfg, vault=v, start="https://app.x.com/settings",
+               choose=scripted_choose(["e1", "DONE"]), field_text=lambda ctx: pytest.fail("no model"))
+    assert r.run()["status"] == "done" and t.acted[0] == ("e1", "eo@x.com")
+    assert v.asked == [("username", "accounts.google.com"), ("username", "app.x.com")]
+
+
+def test_an_email_field_off_a_signin_page_is_not_filled_from_the_vault(cfg):
+    class Chrome(FakeTarget):
+        kind = "chrome"
+    t = Chrome([page(fill("e1", "Email"), url="https://app.x.com/contacts/new", text="New contact"), page()])
+    v = FakeVault(username="eo@x.com")
+    r = Runner("s1", t, "enter 'lead@y.com' in the Email field", None, cfg, vault=v,
+               choose=scripted_choose(["e1", "DONE"]), field_text=lambda ctx: pytest.fail("spelled out"))
+    assert r.run()["status"] == "done" and t.acted[0] == ("e1", "lead@y.com") and v.asked == []
