@@ -187,6 +187,14 @@ def test_text_model_down_drops_fills_and_the_run_goes_on_by_clicking(cfg):
     assert [a for a, _ in t.acted] == ["n2", "n3"]
 
 
+def test_search_for_a_quoted_value_is_typed_without_the_text_model(cfg):
+    t = FakeTarget([page(fill("n1", "Search")), page(click("n2", "Round Robin")), page()])
+    out = Runner("s", t, "Search for 'Round Robin' and click the matching workflow", None, cfg,
+                 choose=scripted_choose(["n1", "n2", "DONE"]),
+                 field_text=lambda ctx: pytest.fail("a spelled-out value never needs the text model")).run()
+    assert out["status"] == "done" and t.acted[0] == ("n1", "Round Robin")
+
+
 def test_text_model_down_with_nothing_to_click_blocks_with_its_cause(cfg):
     def boom(ctx):
         raise RuntimeError("Model provider returned HTTP 402; no action executed.")

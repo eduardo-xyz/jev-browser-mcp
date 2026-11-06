@@ -183,7 +183,7 @@ _PRESS_ESCAPE = re.compile(r"\bpress(?:\s+the)?\s*['\"\u201c\u2018]?(?:escape|es
 _NEG_CLAUSE = re.compile(r"\b(?:not|never|don't|do not|without|avoid|skip|except|instead of)\b([^.;,\n]*)", re.I)
 # a value the goal spells out for a field: a typing verb, then a quoted string or a bare number
 _TYPE_QUOTED = re.compile(
-    r"\b(?:type|enter|write|input|put|fill(?:\s+in)?|set(?:\s+it)?|replace(?:\s+it)?|change(?:\s+it)?)\b"
+    r"\b(?:type|enter|write|input|put|fill(?:\s+in)?|set(?:\s+it)?|replace(?:\s+it)?|change(?:\s+it)?|search(?:\s+for)?|look\s+up)\b"
     r"(?:\s+(?:in|into|the|value|text|number|field|with|as|to|by))*"
     r"\s*(?:['\"\u201c\u2018]([^'\"\u201d\u2019]{1,200})['\"\u201d\u2019]|(-?\d(?:[\d.,:/-]{0,29}\d)?)(?![\w%]))", re.I)
 
