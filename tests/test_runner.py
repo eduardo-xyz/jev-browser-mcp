@@ -996,3 +996,18 @@ def test_values_spelled_out_for_named_fields_find_their_fields_without_the_text_
     out = Runner("s", t, goal, None, cfg, choose=scripted_choose(["n2", "n3", "n1", "DONE"]), field_text=boom).run()
     assert out["status"] == "done"
     assert sorted(t.acted) == [("n1", "88887777"), ("n2", "500"), ("n3", "Consulta Papillo")]
+
+
+def test_a_max_steps_run_logs_the_steps_it_took(cfg, caplog):
+    # seen: "gave up: reason=None saw={}" after three model clicks; the steps were the only
+    # evidence of what went wrong and they lived nowhere once the agent's result was gone
+    import logging
+    screens = [page(click("w", "Wait"), click("s", "Save action"), click(f"o{i}", f"Other {i}"), text="x" * (50 + i))
+               for i in range(4)]   # each click changes the page a little: not a no_progress stop
+    t = FakeTarget(screens)
+    with caplog.at_level(logging.INFO, logger="jevd"):
+        out = Runner("s1", t, "Click 'WAIT (named node)'.", None, cfg, max_steps=3,
+                     choose=scripted_choose(["w", "w", "s"])).run()
+    assert out["status"] == "max_steps"
+    line = next(r.getMessage() for r in caplog.records if "gave up" in r.getMessage())
+    assert '"steps": ["Wait", "Wait", "Save action"]' in line

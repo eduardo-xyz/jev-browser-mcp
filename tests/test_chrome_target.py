@@ -1620,3 +1620,12 @@ def test_offscreen_offers_text_fields_beyond_a_panels_fold():
     js = chrome_mod._OFFSCREEN_JS
     assert 'summary,input,textarea,[contenteditable="true"],[role="textbox"]' in js
     assert "fieldName(e)" in js and "e.getAttribute('placeholder')" in js
+
+
+def test_a_canvas_narrowed_by_an_open_panel_still_offers_its_nodes():
+    # seen: with a node's panel open the builder canvas was 270 px wide, a quarter of the window;
+    # under the old 40 % rule no node was offered, the quoted node was off screen, and the model
+    # clicked another node and then Save action
+    js = chrome_mod._OFFSCREEN_JS
+    assert "cr.width * cr.height < area * 0.4" not in js
+    assert "cr.width * cr.height < area * 0.12 || cr.width < 200 || cr.height < 200" in js

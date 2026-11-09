@@ -823,7 +823,9 @@ _OFFSCREEN_JS = """(() => {
     const cs = getComputedStyle(cv);
     if (!/(hidden|clip)/.test(cs.overflow + ' ' + cs.overflowY) || !vis(cv)) continue;
     const cr = cv.getBoundingClientRect();
-    if (cr.width * cr.height < area * 0.4) continue;
+    // big enough to be a canvas, not a thumbnail: a node panel open beside it leaves the canvas
+    // a quarter of the window (seen: 270 px wide, zero nodes offered, a quoted node unreachable)
+    if (cr.width * cr.height < area * 0.12 || cr.width < 200 || cr.height < 200) continue;
     if (![...cv.children].some(x => getComputedStyle(x).transform !== 'none')) continue;
     const canvas = base + 900000 + k++;
     c.nodes.set(canvas, cv);
