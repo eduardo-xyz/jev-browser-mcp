@@ -28,6 +28,12 @@ HINTS = {
                                "clicking alone. Put the exact text to type in the goal (\"type 'Round "
                                "Robin'\": a spelled-out value never needs the text model), or have the "
                                "text model's account fixed. Decisions use the main model and still work."),
+    "launcher_tile": ("The money-labelled control is an icon tile named by the caption under it (an "
+                      "account's Transferir tile), and the screen does not show this transfer's amount "
+                      "and recipient. Such a tile opens the transfer form; it does not commit. Check "
+                      "the screenshot shows that launcher screen, then `resume(session_id, "
+                      "confirm=True)` to open it. The commit button on the review pauses again on its "
+                      "own (`money_already_attempted`), so this approval covers only the opening tap."),
     "control_disabled": ("The control the goal names is on screen but the app has disabled it (greyed out, "
                          "aria-disabled): a click would do nothing. Don't retry the same click; `read` the "
                          "screen (a disabled toggle shows `(disabled)` on the States line), report what the "

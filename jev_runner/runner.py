@@ -371,13 +371,16 @@ class Runner:
             # what Jev was looking at when it gave up, for the log: the only record once the
             # agent's result is gone (controls, weights, what was tried, the verifier's reason)
             seen = {k: v for k, v in (getattr(self, "last_blocked", None) or {}).items()
-                    if k in ("controls", "text_chars", "weighed", "tried", "refused", "control", "disabled")}
+                    if k in ("controls", "text_chars", "weighed", "tried", "refused", "control", "disabled", "sample")}
             if self._verify_reason:
                 seen["verify"] = self._verify_reason
             if self.history and "tried" not in seen:  # max_steps leaves no BLOCKED detail: the steps are the record
                 seen["steps"] = [h.get("action") for h in self.history][-6:]
+            if "sample" not in seen and self.page:  # what was on offer: was the goal's control there at all
+                seen["sample"] = [(a.get("label") or "")[:40] for a in self.page.get("actions") or []
+                                  if a.get("kind") not in ("wait", "scroll", "key")][:15]
             _log.info("session=%s gave up: reason=%s saw=%s", self.session_id, self.reason,
-                      scrub({"text": json.dumps(seen, ensure_ascii=False)[:600]}, self.secrets)["text"])
+                      scrub({"text": json.dumps(seen, ensure_ascii=False)[:1200]}, self.secrets)["text"])
         if self.status == "done":
             self._save_flow()
         return result.build(self)
@@ -1144,7 +1147,12 @@ class Runner:
             "money", action, page, text_hash=self._text_hash(page),
             expected=scrub_value(check.expected, self.secrets),
             seen=scrub_value(check.seen, self.secrets))
-        raise _Stop("paused_mismatch", "money_already_attempted" if self.money_attempted else None)
+        if self.money_attempted:
+            raise _Stop("paused_mismatch", "money_already_attempted")
+        # An icon tile named by the caption under it ("Transferir" on an account's detail) opens
+        # the form; the commit button on the review is a real button. The pause stands (the
+        # label alone cannot prove which), but the reason says what confirming does.
+        raise _Stop("paused_mismatch", "launcher_tile" if action.get("caption_label") else None)
 
     def _guard_destructive(self, action: dict, page: dict):
         """Never delete on Jev's say-so: pause on a settled screen for resume(confirm=True).

@@ -1011,6 +1011,7 @@ def test_a_max_steps_run_logs_the_steps_it_took(cfg, caplog):
     assert out["status"] == "max_steps"
     line = next(r.getMessage() for r in caplog.records if "gave up" in r.getMessage())
     assert '"steps": ["Wait", "Wait", "Save action"]' in line
+    assert '"sample": ["Wait", "Save action", "Other 3"]' in line   # what was on offer
 
 
 def test_a_tap_that_changed_nothing_is_not_offered_again_on_that_screen(cfg):

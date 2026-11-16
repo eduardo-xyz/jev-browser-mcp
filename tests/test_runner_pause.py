@@ -595,3 +595,20 @@ def test_destructive_pending_keeps_the_guarded_label(cfg):
     assert r.run()["status"] == "paused_confirm" and t.acted == []
     assert r.pending["type"] == "destructive" and is_destructive_action(
         {"kind": "click", "label": r.pending["label"]}, cfg)
+
+
+def test_a_money_tile_named_by_its_caption_pauses_with_the_launcher_reason(cfg):
+    # seen: an account's Transferir tile paused as a plain mismatch; the operators, following the
+    # guide, refused to confirm and the owner had to open the form by hand
+    tile = {**click("t1", "Transferir"), "caption_label": True}
+    t = FakeTarget([page(tile, text="Detalle de cuenta\nSaldo 516.95"), page(click("c", "Continuar"))])
+    r = Runner("s", t, "open the transfer form", {"amount": "29.50", "recipient": "0195"}, cfg,
+               money_params=["amount", "recipient"], choose=scripted_choose(["t1", "DONE"]))
+    out = r.run()
+    assert out["status"] == "paused_mismatch" and out["reason"] == "launcher_tile"
+    assert "opens the transfer form" in out["hint"] and t.acted == []
+    # the same label as a real button on the same kind of screen: the plain mismatch, as before
+    t2 = FakeTarget([page(click("b1", "Transferir"), text="Detalle de cuenta\nSaldo 516.95"), page()])
+    out2 = Runner("s2", t2, "x", {"amount": "29.50", "recipient": "0195"}, cfg,
+                  money_params=["amount", "recipient"], choose=scripted_choose(["b1", "DONE"])).run()
+    assert out2["status"] == "paused_mismatch" and out2.get("reason") != "launcher_tile"

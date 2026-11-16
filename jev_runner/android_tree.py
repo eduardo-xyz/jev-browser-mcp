@@ -241,6 +241,7 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
                         label = f"{label} · {tail}"
             if not label:
                 label = tail
+            from_caption = False
             if not label:
                 # icon button with its caption drawn just below it (tile menus)
                 caps = [(o.bounds[1] - b, o.text or o.desc, o.bounds) for o in inc
@@ -250,6 +251,7 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
                     cap = min(caps, key=lambda c: c[0])
                     label = cap[1]
                     captions.add(tuple(cap[2]))
+                    from_caption = True
             unlabelled = not label
             if unlabelled:
                 # nothing names it (common for Compose images/cards); say what and how big it is
@@ -271,6 +273,8 @@ def parse_hierarchy(xml: str, package: str, activity: str, include_system_ui: bo
                 act["hint"] = n.hint
             if unlabelled:
                 act["unlabelled"] = True
+            if from_caption:
+                act["caption_label"] = True  # a tile: its name is the caption under the icon
             real += 1
             if n.flag("checkable"):
                 act["checked"] = "true" if n.flag("checked") else "false"

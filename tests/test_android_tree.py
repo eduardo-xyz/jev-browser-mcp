@@ -280,3 +280,19 @@ def test_screen_package_is_the_app_filling_the_screen():
     assert screen_package(_OVERLAY_XML) == "com.whatsapp"  # not systemui, not the keyboard bubble
     assert screen_package("<hierarchy/>") is None
     assert screen_package("not xml") is None
+
+
+def test_an_icon_tile_named_by_its_caption_is_marked_and_a_real_button_is_not():
+    # seen: an account's "Transferir" tile (icon + caption) was guarded like the review's
+    # "Transferir" button; the runner needs to know which it is to explain the pause
+    xml = """<hierarchy>
+<node package="com.x" class="android.widget.FrameLayout" bounds="[0,0][1080,1920]" enabled="true" clickable="false" text="" content-desc="" resource-id="">
+  <node package="com.x" class="android.widget.ImageView" bounds="[100,500][200,600]" enabled="true" clickable="true" text="" content-desc="" resource-id=""/>
+  <node package="com.x" class="android.widget.TextView" bounds="[90,610][210,650]" enabled="true" clickable="false" text="Transferir" content-desc="" resource-id=""/>
+  <node package="com.x" class="android.widget.Button" bounds="[100,1700][980,1800]" enabled="true" clickable="true" text="Transferir" content-desc="" resource-id="com.x:id/btnTransfer"/>
+</node></hierarchy>"""
+    acts = [a for a in parse_hierarchy(xml, "com.x", "Main")["actions"] if a["kind"] == "click"]
+    tile = next(a for a in acts if a["role"] != "button" or not a.get("resource_id"))
+    button = next(a for a in acts if a.get("resource_id", "").endswith("btnTransfer"))
+    assert tile["label"] == "Transferir" and tile.get("caption_label") is True
+    assert button["label"] == "Transferir" and "caption_label" not in button
