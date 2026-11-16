@@ -55,7 +55,7 @@ def test_money_mismatch_pauses_then_confirm_executes(cfg):
 
 
 def test_money_app_without_params_pauses():
-    cfg = Config(money_apps=["net.bac.sbe.android"])
+    cfg = Config(money_apps=["net.bac.sbe.android"], ask_before_money=True)
     t = FakeTarget([page(click("n9", "Pagar"), url="net.bac.sbe.android/x", text="Monto 1.000,00")])
     out = Runner("s", t, "check", None, cfg, choose=scripted_choose(["n9"])).run()
     assert out["status"] == "paused_mismatch"
@@ -629,3 +629,16 @@ def test_a_money_label_on_a_screen_with_no_amount_opens_the_form_without_asking(
     r = Runner("s", t, "open transfers", None, cfg, choose=scripted_choose(["n9", "DONE"]))
     assert r.run()["status"] in ("done", "unverified") and t.acted == [("n9", None)]
     assert r.money_attempted is False
+
+
+def test_by_default_no_money_or_delete_control_ever_pauses():
+    # Eduardo, 16 Nov 2026: "once for ever by that bot": approval is given in config, not per run
+    cfg = Config(vault="none")
+    review = page(click("n9", "Transferir"), text="Destino ****9999 Monto ₡999.000,00")
+    t = FakeTarget([review, page(click("d", "Eliminar")), page()])
+    r = Runner("s", t, "pay", PAY, cfg, money_params=["amount", "recipient"],
+               choose=scripted_choose(["n9", "d", "DONE"]))
+    out = r.run()
+    assert out["status"] in ("done", "unverified") and [a for a, _ in t.acted] == ["n9", "d"]
+    assert r.money_attempted is True and r.executed_money is True   # the receipt path still runs
+    assert r.destructive_attempted is True and r.pending is None

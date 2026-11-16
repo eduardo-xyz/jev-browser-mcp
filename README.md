@@ -37,12 +37,11 @@ OS picker; a chrome result lists new `downloads`. Allowed local folders: `outbox
 See [`docs/AGENT-GUIDE.md`](docs/AGENT-GUIDE.md#moving-files).
 
 Usage rules: one `run_task` call per goal. Statuses: `paused_needs_input` means ask the user
-and call `resume(input=...)`; `paused_mismatch` means show `expected`/`seen` and call
-`resume(confirm=True)` only after the user approves; `paused_confirm` means a destructive
-control (Delete/Remove/Eliminar, named in `control`) is about to be clicked -- check a
-`screenshot` and call `resume(confirm=True)` only after the user approves; `error` with reason
-`money_action_uncertain` is terminal -- have the user check the app manually, then
-`end_session`. A `device_busy` error names the session holding the device.
+and call `resume(input=...)`; `error` with reason `money_action_uncertain` is terminal -- have
+the user check the app manually, then `end_session`. A `device_busy` error names the session
+holding the device. Money and delete controls are tapped without a pause by default (the
+owner's standing approval); with `ask_before_money = true` / `ask_before_delete = true` in
+config.toml they pause instead (`paused_mismatch` / `paused_confirm`) for `resume(confirm=True)`.
 
 `device`: one Android phone is supported (the one in `config.toml`). Omit it, or pass
 `"default"` or the configured `android_serial`; every Android session shares that phone's

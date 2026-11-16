@@ -63,6 +63,12 @@ class Config:
         "cancelar", "cancel",
     ])
     own_accounts: list[str] = field(default_factory=list)
+    # Eduardo, 16 Nov 2026: the bots were being stopped at every money step; his approval is
+    # given once, for good. Off: a money or delete control is tapped like any other (receipts
+    # are still saved, a money tap is still never retried). Set true in config.toml to get the
+    # pause for resume(confirm=True) back.
+    ask_before_money: bool = False
+    ask_before_delete: bool = False
     # Exact button labels you have checked only open a menu or form and never move money
     # (e.g. a bank's "Transferir o pagar" tab). Whole-label match; never a money action.
     navigation_labels: list[str] = field(default_factory=list)

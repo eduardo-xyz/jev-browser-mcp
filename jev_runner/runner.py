@@ -1131,7 +1131,8 @@ class Runner:
         form taps on its own; after one confirm in this run nothing asks again. Otherwise pause,
         once. Seen: a bank flow stopped at the account's Transferir tile, at the review, and
         again after a confirm whose screen had gained a toast; the owner finished by hand."""
-        if self.money_confirmed:
+        if self.money_confirmed or not self.cfg.ask_before_money:
+            # approved once, for good (config): tapped like any other control, receipt kept
             self._execute(action, page, None, verify=True, money=True)
             return
         text = self._money_text(page)
@@ -1158,6 +1159,9 @@ class Runner:
         """Never delete on Jev's say-so: pause on a settled screen for resume(confirm=True).
         Every destructive click pauses (a delete plus its confirm dialog is two confirms).
         Its own status, not paused_mismatch, so a standing money approval never covers a delete."""
+        if not self.cfg.ask_before_delete:
+            self._execute(action, page, None, verify=True, destructive=True)
+            return
         page, action = self._settled(page, action)
         self.pending = self._pending_for("destructive", action, page,
                                          text_hash=self._text_hash(page),
@@ -1315,7 +1319,8 @@ class Runner:
             self._guard_money(action, page, money_params)
             return
         if is_destructive_action(action, self.cfg):
-            self._guard_destructive(action, page)
+            self._guard_destructive(action, page)  # tapped there, or paused
+            return
         text = text_for() if action["kind"] == "fill" else None
         if is_send_action(action, self.cfg):
             # One send per run, and never the tap-retry path: a forward returns to a

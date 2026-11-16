@@ -11,7 +11,8 @@ def _data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def cfg():
-    return config.Config(vault="none")  # tests never touch the real Keychain
+    # tests never touch the real Keychain; the pauses are on so the ask path stays covered
+    return config.Config(vault="none", ask_before_money=True, ask_before_delete=True)
 
 
 @pytest.fixture(autouse=True)

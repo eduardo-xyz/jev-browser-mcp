@@ -75,3 +75,10 @@ taps on its own; a commit whose screen does not match pauses once; after that `r
 the rest of the run never asks again, including a second money tap and a screen that changed
 since the screenshot (the control must still be there). The `launcher_tile` reason and the
 `money_already_attempted` re-pause are gone. Deletes still pause every time.
+
+## Same day, later: approval given once, for good
+
+Eduardo: not once per run, once for ever by that bot; stop creating blockers. The money and
+delete pauses are now off by default (`ask_before_money`, `ask_before_delete` in config.toml,
+both false). A money or delete control is tapped like any other; receipts are still saved and a
+money tap is still never retried. The ask path stays in the code behind those two switches.

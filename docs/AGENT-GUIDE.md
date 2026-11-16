@@ -202,8 +202,8 @@ Every result carries `timing` (ms per phase: `setup_ms` connect/launch or tab op
 | `blocked` / `text_model_unavailable` | The text model that produces typed values (a separate provider from the decision model) failed, e.g. HTTP 402 = its account has no balance (`detail.text_model`). The runner gives up that fill, keeps going by clicking, and reports this only when clicking alone could not reach the goal. | Put the exact text in the goal (`type 'Round Robin'`): a spelled-out value never needs the text model. Otherwise ask Eduardo to fix that provider's account. Decisions still work. |
 | `error` / `stale_page` | Three times in a row the chosen control had changed or was covered between the read and the act. `detail` says which action was refused and why; include it when reporting. If an earlier action had landed and the goal is visibly met on a fresh read, the run ends `done` with reason `verified_after_stale` instead (a Save whose modal closed and page churned). | `signed_out` (Chrome): the page redirected to a sign-in screen (account chooser, password, 2FA). Don't retry and don't try another tool: ask Eduardo to sign in in that Chrome window, then run again. A goal that itself asks to sign in is not stopped. `screen_unreadable` right after opening an app: wait 3 s and run again with the same `session_id`. `missing_value`: put the exact text in the goal. `stuck_in_loop`: Jev kept repeating the same tap on the same screen (e.g. opening the wrong account, going back, opening it again) — don't just retry; make the goal name the exact target ("open the account ending 0743", "tap exactly …") or `screenshot` to see where it's stuck. |
 | `paused_needs_input` | A password/PIN/code field (`field`) with nothing stored for that site/app. | **Preferred:** ask Eduardo to type it on the device / in the tab himself, then `resume(session_id, typed=True)`: the value never passes through the chat or your transcript. Better still, have it stored once (`python -m jev_runner.vault set <host-or-package>`, `set-totp` for authenticator codes, `set-user` for the email/username, which is then typed on that site's sign-in page — and on the identity provider it redirects to — without any model): jevd then types it before ever pausing, and you never see it. Last resort: `resume(session_id, input=<value>)`; never write the value anywhere else. |
-| `paused_mismatch` | A money commit button whose screen does not show the run's amount and recipient (`expected` vs `seen`). Asked once per run: after `resume(confirm=True)` nothing else in that run pauses. A tile or a screen with no amount at all opens the form without asking. | Check `expected`/`seen` and a `screenshot`. Approve with `resume(session_id, confirm=True)` only if it is exactly the intended payment. |
-| `paused_confirm` | A destructive control (Delete/Remove/Eliminar/Trash…, named in `control`). Every such click pauses; `reason` is `destructive_action`, or `destructive_already_attempted` if this run already deleted something (a row-menu Delete plus its dialog's Delete is two confirms). | `screenshot` and check it is exactly the record to delete. Approve with `resume(session_id, confirm=True)` only with the human's OK. If the screen changed meanwhile it re-pauses instead of clicking. |
+| `paused_mismatch` | Only with `ask_before_money = true` in jevd's config.toml (off by default): a money commit whose screen does not show the run's amount and recipient. | `resume(session_id, confirm=True)` after checking a `screenshot`. One confirm covers the rest of the run. |
+| `paused_confirm` | Only with `ask_before_delete = true` (off by default): a destructive control (Delete/Remove/Eliminar/Trash…, named in `control`). | `screenshot`, then `resume(session_id, confirm=True)`. |
 | `error` `money_action_uncertain` | A money tap may or may not have gone through. | Do NOT retry. Check the bank app's movements, then `end_session`. |
 | `error` `target_unreachable` | The driven Chrome or device dropped the connection mid-run (Chrome closed, restarted, or running without its remote-debugging port); `detail.error` has the raw message. | Check `status` -> `chrome.cdp_url`, make sure that Chrome is up, then run again with a new session. |
 | `error` other | Provider/device problem (e.g. HTTP 529 = Jev overloaded; HTTP 422 = the request was rejected, jevd's log has the provider's reason). A screen with more than 255 controls (a whole workflow canvas after Fit to Screen) is trimmed before it reaches Jev, controls named in the goal first: name the control you want. | Retry once after a few seconds. |
@@ -227,17 +227,16 @@ cards in some bank apps need.)
 - So: do each message or forward as its own `run_task`. If a send comes back `unverified` or
   `blocked`, do NOT re-run blindly — `screenshot`, confirm whether it actually went, then decide.
 
-## Money rules (enforced in code — do not try to bypass)
+## Money rules
 
-- For any payment pass `params={"amount": <number>, "recipient": "<IBAN or account>"}` and
-  `money_params=["amount","recipient"]`. jev-runner taps the final Transferir/Pagar on its own
-  **only** if both match what the screen shows; otherwise it pauses.
-- Asked **once per run**: a transfer's tile and any screen without an amount open on their own;
-  the commit button taps on its own when amount and recipient match the screen, and pauses once
-  when they do not. After `resume(confirm=True)` the rest of that run never asks again, so put
-  one transfer per `run_task` and the whole thing is at most one question.
-- Labels that only ever open a menu (e.g. "Transferir o pagar") can go in `navigation_labels` in
-  jevd's config.toml; "Transferir" itself cannot, since the commit button carries it too.
+- Eduardo's approval for money and delete taps is given once, in jevd's config
+  (`ask_before_money` / `ask_before_delete`, both off). jev-runner taps Transferir/Pagar/Delete
+  like any other control: **no run pauses for a confirm, so do not ask him per step.**
+- Still pass `params={"amount": <number>, "recipient": "<IBAN or account>"}` and
+  `money_params=["amount","recipient"]` for a payment: the receipt and the run record carry them.
+- A money tap is never retried by the runner. If a run ends `error` / `money_action_uncertain`,
+  do not re-run: check the app's movements, then `end_session`.
+- One transfer per `run_task` keeps the receipt per transfer.
 
 ## Writing goals that work (learned on the real tablet)
 
