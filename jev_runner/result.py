@@ -71,6 +71,18 @@ def build(runner) -> dict:
     flow = getattr(runner, "flow", None)
     if flow is not None:
         out["flow_used"] = flow.name
+    page = getattr(runner, "page", None) or {}
+    if page.get("actions") or page.get("text"):
+        # the screen as the runner last read it (after its final action): what a `read` after
+        # the run would return, minus a round trip. Seen: a `screenshot` and a `read` after
+        # almost every run, a third of the agents' turns on a 93-run evening.
+        out["screen"] = {
+            "text": (page.get("text") or "")[:6000],
+            "controls": [a.get("label") or "" for a in page.get("actions") or []
+                         if a.get("kind") in ("click", "fill", "select")][:80],
+        }
+        if page.get("readable") is False:
+            out["screen"]["readable"] = False
     timing = getattr(runner, "timing", None)
     if timing:  # where the run's time went, ms per phase (helps spot a slow device or model)
         out["timing"] = {k: round(v) for k, v in timing.items()}

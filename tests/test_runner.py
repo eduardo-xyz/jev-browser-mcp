@@ -1041,3 +1041,11 @@ def test_after_a_dead_tap_the_model_sees_only_wait_and_may_stop(cfg):
     out = Runner("s1", t, "Tap Saldo.", None, cfg, choose=choose).run()
     assert [a for a, _ in t.acted] == ["t1"] and "click" not in seen[1]   # one tap, then it is gone
     assert out["status"] == "blocked" and out["reason"] != "no_progress"
+
+
+def test_the_result_carries_the_final_screen_so_no_read_is_needed_after_a_run(cfg):
+    # seen: a screenshot and a read after almost every run; the runner had already read that screen
+    t = FakeTarget([page(click("n1", "Next"), text="Step one"), page(click("n2", "Finish"), fill("f", "Name"), text="Step two")])
+    out = Runner("s1", t, "go to step two", None, cfg, choose=scripted_choose(["n1", "DONE"])).run()
+    assert out["screen"] == {"text": "Step two", "controls": ["Finish", "Name"]}
+    assert "s3cret" not in json.dumps(out)
