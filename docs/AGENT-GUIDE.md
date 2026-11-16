@@ -1,273 +1,100 @@
 # jev-runner — guide for agents
 
-For any AI agent (Grok Bot, Claude, …) that will drive apps on Eduardo's Android tablet or Mac
-Chrome through jev-runner. Read this whole page before the first call.
+For any AI agent that drives apps on Eduardo's Android tablet or Mac Chrome through jev-runner.
+Setup, Chrome binding and the long reference of what the runner does on its own live in
+`docs/SETUP.md`; you do not need them to run tasks.
 
 ## What it does
 
-You send one natural-language goal; jev-runner drives the app step by step with TypeSafe's Jev
-model and returns a short JSON result. You never tap, read screens or handle images yourself.
-
-## Connect (on Eduardo's Mac)
-
-MCP server over stdio:
-
-```bash
-uv run --directory /Users/eduardo/Projects/Personal/jev-browser-mcp --env-file .env python server.py
-```
-
-Prerequisites (already set up on this Mac): `.env` with `TYPESAFE_API_KEY` and the DeepSeek
-text-model key; `~/.local/share/jev-runner/config.toml` with the tablet serial, `own_accounts`
-and `navigation_labels`; the tablet on USB or the same Wi-Fi with wireless debugging on.
-Check with the `status` tool: `android.connected` must be `true`.
-
-If the `jev-runner` tools aren't in your session, register it once:
-`claude mcp add jev-runner -- uv run --directory /Users/eduardo/Projects/Personal/jev-browser-mcp --env-file .env python server.py`
-
-### Pointing at a specific Chrome profile
-
-For `target: "chrome"`, jev-runner drives whichever Chrome the Browser Harness daemon is attached to —
-which may not be the profile you want (this has picked the wrong profile repeatedly). **Always confirm
-the profile first**: open a known page and `screenshot`, before anything else.
-
-To bind an instance to one profile, launch that Chrome with its own remote-debugging port and run a
-**separate** jevd pointed at it, with its own data dir so it doesn't touch the shared instance. Put
-the binding in that data dir's `config.toml`, so it holds no matter who starts the daemon:
-
-```toml
-# $JEV_DATA_DIR/config.toml
-chrome_cdp_url = "http://127.0.0.1:9333"   # the Chrome's --remote-debugging-port endpoint
-chrome_label = "<label>"                    # short name for its harness daemon (e.g. "da")
-```
-
-```bash
-JEV_DATA_DIR=~/.local/share/jev-<label> \
-  uv run --directory /Users/eduardo/Projects/Personal/jev-browser-mcp --env-file .env python server.py
-```
-
-`JEV_DATA_DIR` is the only variable the launch needs: it picks the data dir, and the data dir's config
-picks the Chrome. (`BU_CDP_URL`/`BU_NAME` in the environment still work for a one-off, but
-`config.toml` wins when both are set, and the daemon logs the override.) The daemon also loads the
-repo `.env` itself, so a jevd started without `--env-file` still has its model keys.
-
-A signed-in web app can still bounce one fresh load of a deep link to its login page (seen with a
-session token mid-refresh). Jev reloads the start URL once before reporting `signed_out`; a truly
-signed-out Chrome lands on the login page again and blocks as before.
-
-A click that opens a new tab (window.open, target=_blank) is followed: the run continues in the new
-tab and closes the one it came from when the session ends. While a page shows loaders or skeletons (or almost no text), the runner looks again on its own, up to
-20 s per run, before asking Jev anything: no more BLOCKED on a navigation shell. Loaders inside a
-cross-origin iframe count too, and a frame whose text is still changing is waited for as well. Controls that another
-element is sitting on (an open panel, a sticky bar) are left out of the observed actions, since a click
-there would land on the covering element. Pages built from web components (shadow DOM) are read through
-their shadow roots, and their controls are clicked there too. Panels that scroll inside the page (a
-log or table in its own scroll box while the window never moves) get `Scroll the list down/up` actions,
-so rows below the fold are reachable without a date picker or a search. Jev and the verifier see the text
-in the viewport, and the verifier judges the final screen: a list that fits three tall rows per screen cannot
-verify "read the first 5" (seen on a ticket list: 30 rows a page, three in view, `unverified`). Ask for what
-the screen shows and page through with `read()` after each scroll, or name the row you want. A flow or diagram canvas (a workflow
-editor's node graph) gets `Pan the <canvas> down/up/left/right` actions: its nodes sit beyond the visible pane
-in both directions, and every titled node beyond the pane is offered as `Bring <title> into view`, which pans
-to it in one step, measuring as it goes (blind pans overshoot). Quote the title exactly as the card shows it
-(a `jev_blocked` detail lists them under `canvas_nodes`); a node's settings text ("4 hours") is not on its card:
-"bring the node 'WAIT' into view, then click it". A title quoted in the goal that matches an offer exactly
-(case and spacing aside) is brought in by the runner itself, without asking Jev, so a look-alike node
-("Go To 4 Hour Wait" next to "WAIT 4 hours") cannot win; quote the full title. The same holds for any
-control: a label quoted after a click verb ("click the 'Unit: minutes' dropdown and choose 'days'") is clicked
-by the runner itself, once, when exactly one control on screen carries it; "do not click 'Save'" is honoured. Do not ask for "Fit to Screen" or a
-zoom-out on such a canvas: it shrinks node titles below what Jev can read (3 px) and puts hundreds of
-unlabelled controls on screen, more than the model takes. The text of a cross-origin
-iframe is part of what Jev and the verifier read, not only of `read()`. Dropdown triggers built as plain focusable boxes (a ticket's property fields: `Status: Pending`) are offered as
-clicks named by their field. Same-named controls (one `Domain Options` per card, one `Open` per row) are told apart by their row:
-`Domain Options — <the card's first line>`, so name the row or card in the goal. An icon-only row control with no
-name of its own is named by the words of its element id and its row (`user row edit — <person>`,
-`user row delete — <person>` on Settings > Users): quote that label after the click verb to open the row's panel.
-A control beyond the visible box of a panel that scrolls inside the page (a permission group header deep
-in a settings drawer, a row far down a list) is offered as `Bring <label> into view` only when the goal
-names it, so quote the label as the app shows it (`click the 'Dashboard 9/9' group header`): the runner
-wheels the panel until it is in view, then the quoted-click rule clicks it. Controls covered at their
-centre by something else (the panel's own `Delete` under its confirm dialog) are not offered, so `click
-'Delete'` on a confirm dialog hits the dialog's button.
-`read()` ends with a `States:` line naming every visible switch, checkbox and radio with `=on`, `=off` or
-`=mixed` (named by its row), so a partial permission group can be recorded before anything is toggled.
-A toggle the app has greyed out reads `=on (disabled)`: it is never offered, and a goal that says to click it
-ends `blocked` with reason `control_disabled` and `detail.control` (no model call). Change whatever governs it
-first, or report what the app allows; retrying the same click gets the same answer.
-A switch, checkbox or radio with no name of its own (a component's stock aria-label, or only an id) is offered
-as `switch — <row>` / `checkbox — <row>` with the same row name the States line uses, so `click 'switch —
-Dashboard'` is unambiguous next to the `Dashboard` nav item and the `Dashboard 9/9` header.
-A value the goal spells out for a field (`select all and type 3`, `enter 'Follow-up call' in the Name field`, `search for 'Round Robin'`) is
-typed by the runner itself, no text model involved, as long as it is the only value left to type. Several values
-in one goal each find their field when the goal names it: `type '500' into the Monto field. Type 'Consulta' into
-the 'Descripción' box` (`type exactly '…'` counts too); values with no field named go to the text model, which must
-work out which is which. Secrets never come from the goal: a password field takes the Keychain entry or pauses.
-A goal that says to click a label `once` ends `done` after that click, even if the model then answers BLOCKED,
-and that `done` is **verified by construction** (the verifier is not asked to imagine an end state); `read`
-afterwards to confirm the state. On Android the **on-screen keyboard is the runner's own step**: `hide the
-keyboard` in the goal dismisses it without the model, and a quoted control to click that is not on screen while
-the keyboard is up gets the keyboard dismissed first (so `Hide the keyboard, then tap 'Continuar'` is one run).
-Same-titled workflow cards are told apart by their badge (the contact count on the card): off screen they are
-offered as `Bring WAIT 24 hour (change this if you need) — 29 into view`, and on screen the card reads
-`... — 29` too, so quote the title with its badge for both the bring and the click (a short title in the click
-still resolves to the full name the goal quoted for the bring). Two cards with the same title and the same badge
-are numbered in canvas order, top to bottom: `... — 20` and `... — 20 (2)`, on screen and off.
-A control the goal rules out (`Do not click Delete or Publish`, up to the next comma or period) is never shown
-to the model. Once every click the goal quotes has happened, a model act on a control the goal does not name
-ends the run `done` with reason `named_clicks_done` and `detail.refused`; if that further step was wanted, name
-it in the goal ("then click 'Next'").
-`press Escape` in a goal is done by the runner itself (one key press, no model): the way to dismiss a modal,
-dropdown or popover that offers no close control you can name.
-A goal that says to click a quoted label `once` is honoured: after the runner's own click, a repeat of that
-label is refused and the run ends, so a toggle is never flipped back (give such a goal `max_steps` 3 or so).
-A click is refused as stale only
-when its own control or the document changed, not when the page scrolled or another field ticked.
-A page whose observe comes back with empty `text` after it has settled really
-shows nothing in the viewport (`why: blank_page`): check the URL in a browser before blaming the tool. Known
-GHL routes that render blank on every location: `/settings/team` (the team page is `/settings/users`) and the
-plural `/automation/workflows/<id>` (the editor is `/automation/workflow/<id>`).
-
-**Check before the first Chrome run:** `status` → `chrome.cdp_url` must be the Chrome you expect and
-`keys` must all be true. A jevd attached to the wrong Chrome (one that is not signed in) shows every
-run as `blocked / signed_out`; a missing key fails every run.
-
-Each data dir gets its own socket automatically, so instances stay isolated (a long `JEV_DATA_DIR` is
-fine now — the socket is relocated to a short path when needed).
-
-### Identifying jev-runner's tabs (named + coloured tab groups)
-
-jev-runner tags each Chrome tab it opens with AI Broker so the **AI Broker Tab Groups** extension puts
-it in a named, coloured group — the same mechanism `relay.mjs` uses for chrome-devtools-mcp. It's
-best-effort and off unless three things are present, and a failure never affects a run:
-
-1. `BU_NAME` set on the jevd launch, and a broker profile token at
-   `~/Projects/Personal/AI-Broker/.broker/cli/claude-<BU_NAME>-cli.token` (override the dir with
-   `JEV_BROKER_TOKEN_DIR`; broker URL defaults to `http://127.0.0.1:18765`, override with
-   `JEV_BROKER_URL`). The group label defaults to `JEV <BU_NAME>`; set **`JEV_GROUP_NAME`** to show the
-   session's own name instead (e.g. `JEV_GROUP_NAME=Turbo`) — `BU_NAME` stays the token key, so it
-   can't double as the label. Chrome renders group titles in uppercase; that's display-only.
-2. The broker running, and the **AI Broker Tab Groups** extension loaded in the Chrome that jevd
-   drives (`BU_CDP_URL`).
-3. The group **colour** is derived from the name; pin a specific one in
-   `.broker/cli/browser-groups.json` under `colors` (e.g. `{"JEV da": "orange"}`) — that's Eduardo's
-   file, not jevd's.
-
-jevd claims each tab on creation and sends a keep-alive while a session is active, so the broker's
-idle sweep (10 min) won't close an in-use tab. With no token/`BU_NAME` it is a silent no-op.
+You send one natural-language goal; jev-runner drives the app step by step and returns a short
+JSON result with the screen it left. You never tap, read screens or handle images yourself.
 
 ## Tools
 
 | Tool | Use |
 |---|---|
-| `run_task(target, goal, url_or_app, params, money_params, max_steps, session_id, learn, save_as)` | One goal. `target` is `"android"` or `"chrome"`. `url_or_app`: Android package (preferred, e.g. `net.bac.sbe.android`, `com.whatsapp`) or URL. Pass `session_id` to continue in the same session; with `session_id` **and** a URL the tab is taken to that URL first (error `tab_gone` if the tab was closed: run again without `session_id`). On chrome, a run for a URL that an idle jev-runner tab already shows **reuses that tab** (the same `session_id` comes back): no new tab and no page load. Call `end_session` first if you need a fresh tab. |
-| `resume(session_id, input, instruction, confirm)` | Continue a paused session. |
-| `screenshot(session_id)` | Saves a PNG of the screen, returns its path. Use it to check before approving anything. |
-| `read(session_id)` | Read-only. Returns the page's visible `text` and per-iframe `frames`, **including cross-origin iframes** the normal snapshot can't see (e.g. a white-labelled GHL automation screen). Use it to list/read content when a `run_task` only "waits" because the real UI is in an iframe. It **self-settles** (re-reads until the text stops growing, up to ~12 s), so no manual sleep is needed. Only visible rows of a virtualised table are captured. Never clicks or changes anything. |
-| *(every run result)* | `screen` = `{text, controls}`: the screen as the runner last read it, after its final action. Use it instead of calling `read` or `screenshot` after a run; call `screenshot` only when you need the image. `last_actions` lists what was done. |
+| `run_task(target, goal, url_or_app, params, money_params, max_steps, session_id, learn, save_as, files)` | One goal. `target` is `"android"` or `"chrome"`. `url_or_app`: Android package (e.g. `net.bac.sbe.android`) or URL. Pass `session_id` to continue in the same session; with a URL too, the tab is taken there first (`tab_gone` = the tab was closed: run again without `session_id`). On chrome a URL an idle jev-runner tab already shows reuses that tab. |
+| `resume(session_id, input, instruction, typed)` | Continue a paused session. |
+| `read(session_id)` | Read-only: the page's visible `text`, per-iframe `frames` (cross-origin included) and a `States:` line for every switch/checkbox/radio. Self-settles. Never clicks. |
+| `screenshot(session_id)` | Saves a PNG, returns its path. Only when you need the image. |
 | `end_session(session_id)` | Always call when finished, and after `money_action_uncertain`. |
-| `add_lesson(body, target, app, goal, screen_tags)` | Save durable playbook knowledge to the experience memory (replaces hand-editing `lessons.md`), e.g. "avoid the Quiero sheet". Scope it with `target`/`app`/`goal` so future runs on the same app/goal retrieve it automatically. Account/PII digit runs are stripped. |
+| `add_lesson(body, target, app, goal, screen_tags)` | Save durable playbook knowledge (e.g. "avoid the Quiero sheet"); future runs on that app/goal get it as a hint. |
+| `push_file`, `pull_file`, `share_file` | Mac ↔ phone files; `share_file(path, package)` opens Android's Share into that app. `run_task(chrome, files=[...])` attaches files to a web page's upload fields. Paths must be under the data dir's `outbox/`, `~/Downloads`, `~/Desktop`, `~/Documents`. |
 | `status`, `list_flows`, `delete_flow` | Housekeeping. |
-| `push_file(path, dest_dir)` | Mac → phone: copies into `/sdcard/Download` (default) and indexes it so the phone's gallery/document/attach pickers list it. |
-| `pull_file(phone_path)` | Phone → Mac: copies a `/sdcard/...` file into the data dir's `inbox/`. |
-| `share_file(path, package, mime)` | Opens Android's Share for a Mac file (pushed first) or a `/sdcard/...` file; with `package` (e.g. `com.whatsapp`) straight into that app. Then `run_task` to pick the chat and tap Send. Prefer this over an app's in-app file picker (WhatsApp's document picker often stalls). Refused while a run is driving the phone. |
 
-Every run also records scrubbed metrics, and each run automatically retrieves the lessons relevant
-to its goal/app and feeds them to Jev as hints — so writing a good lesson once helps future runs.
+## Every result
 
-## Moving files
+- `status` and `reason` (below), `last_actions` (what was done), `timing` (ms per phase).
+- **`screen` = `{text, controls}`: the screen as the runner last read it, after its final action.
+  Use it to decide the next step. Do not call `read` or `screenshot` after a run unless you need
+  the image.**
+- `detail` on blocked, unverified and max_steps: `controls` by kind, `sample` (labels on offer),
+  `tried` (what was tapped), `weighed` (how BLOCKED scored), the verifier's reason. Read it
+  before re-sending a goal.
+- `downloads` (chrome): files the run saved to `~/Downloads`. `receipt` after a money tap.
 
-Several ways, pick the one that fits:
+## Statuses
 
-| From → to | How |
-|---|---|
-| Mac → web page | `run_task(target="chrome", files=["/Users/…/Downloads/invoice.pdf"], goal="Attach the invoice and save")`. The page's file inputs (even hidden ones behind an "Upload" button) appear as `Upload file <name> → <field>` actions; choosing one sets the file directly. The macOS file picker never opens. A single-file input takes the next file in the list. |
-| web page → Mac | Anything a chrome run downloads is listed in the result's `downloads` (finished files new in `~/Downloads`). |
-| Mac → phone | `push_file`, then a `run_task` that attaches it from the app's picker (it's in Downloads / recent files). |
-| Mac or phone → app on the phone | `share_file(path, package=...)`, then `run_task` to choose the recipient and Send. |
-| phone → Mac | `pull_file("/sdcard/Download/x.pdf")`. |
-| phone → web page | `pull_file`, then `run_task(chrome, files=[<local path>])`. |
-
-Local paths must be under the allowed folders: the data dir's `outbox/` (a bare file name means
-outbox), `~/Downloads`, `~/Desktop`, `~/Documents`, or what `file_roots` in `config.toml` lists.
-Hidden files and key/secret-looking names (`.env`, `id_rsa`, `*.pem`, `*token*`, …) are refused.
-Uploading is not sending: the page's Send/Save button afterwards still goes through every guard.
-
-## Results and what to do
-
-Every result carries `timing` (ms per phase: `setup_ms` connect/launch or tab open, `observe_ms` screen reads, `decide_ms` TypeSafe choices, `text_ms` field values, `act_ms` taps/typing, `verify_ms` the final check). If a run felt slow, look there before changing the goal.
-
-| `status` | Meaning | Do |
+| `status` / `reason` | Meaning | Do |
 |---|---|---|
-| `done` | Goal done and confirmed by an independent check of the final screen. A goal that only reads, views, opens, expands, shows or lists changes nothing, so it is not re-checked by the second opinion (which could only false-negative on it) — it ends `done` on Jev's own verdict; use `read()` to pull the exact content. | Next step. |
-| `unverified` | Jev said done, the check disagreed (`reason`). (A read-only/expand goal is never marked `unverified` — there is nothing persistent to disagree about.) `reason` `tap_changed_nothing`: the goal's named control was tapped and the screen stayed the same (re-read once): the tap did not take. | Treat as NOT done. `screenshot`, then retry or fix the goal. On `tap_changed_nothing` name a different control on that card or row (its text, its icon) or scroll it fully into view; `detail.sample` lists what was on offer. |
-| `blocked` | Could not continue (`reason`, e.g. `jev_blocked`, `control_disabled`, `screen_unreadable`, `missing_value`, `stuck_in_loop`, `signed_out`). `control_disabled`: the control the goal names is on screen but the app has disabled it (`detail.control`; `detail.disabled` lists every greyed-out toggle in view): don't retry, change what governs it or report it. `jev_blocked` carries `detail`: the URL, `text_chars`, `controls` by kind (plus `in_iframes`, `covered`, `waited_loading_ms` when relevant) `sample` (the first control labels on offer) and `weighed` (how BLOCKED scored against acting). `why: blank_page` means nothing rendered at all after the loading wait (`text_chars` 0, at most an injected widget button): the URL is almost always wrong, a route the app does not know shows an empty shell (e.g. `/automation/workflows/<id>` instead of `/automation/workflow/<id>`); fix the URL before reporting. `why: no_controls` means nothing clickable reached Jev (a canvas, a frame it cannot read, a page still arriving): `screenshot` and report it here. Controls present but a high BLOCKED weight: the goal did not name a control on that screen; name it. |
-| `blocked` / `text_model_unavailable` | The text model that produces typed values (a separate provider from the decision model) failed, e.g. HTTP 402 = its account has no balance (`detail.text_model`). The runner gives up that fill, keeps going by clicking, and reports this only when clicking alone could not reach the goal. | Put the exact text in the goal (`type 'Round Robin'`): a spelled-out value never needs the text model. Otherwise ask Eduardo to fix that provider's account. Decisions still work. |
-| `error` / `stale_page` | Three times in a row the chosen control had changed or was covered between the read and the act. `detail` says which action was refused and why; include it when reporting. If an earlier action had landed and the goal is visibly met on a fresh read, the run ends `done` with reason `verified_after_stale` instead (a Save whose modal closed and page churned). | `signed_out` (Chrome): the page redirected to a sign-in screen (account chooser, password, 2FA). Don't retry and don't try another tool: ask Eduardo to sign in in that Chrome window, then run again. A goal that itself asks to sign in is not stopped. `screen_unreadable` right after opening an app: wait 3 s and run again with the same `session_id`. `missing_value`: put the exact text in the goal. `stuck_in_loop`: Jev kept repeating the same tap on the same screen (e.g. opening the wrong account, going back, opening it again) — don't just retry; make the goal name the exact target ("open the account ending 0743", "tap exactly …") or `screenshot` to see where it's stuck. |
-| `paused_needs_input` | A password/PIN/code field (`field`) with nothing stored for that site/app. | **Preferred:** ask Eduardo to type it on the device / in the tab himself, then `resume(session_id, typed=True)`: the value never passes through the chat or your transcript. Better still, have it stored once (`python -m jev_runner.vault set <host-or-package>`, `set-totp` for authenticator codes, `set-user` for the email/username, which is then typed on that site's sign-in page — and on the identity provider it redirects to — without any model): jevd then types it before ever pausing, and you never see it. Last resort: `resume(session_id, input=<value>)`; never write the value anywhere else. |
-| `paused_mismatch` | Only with `ask_before_money = true` in jevd's config.toml (off by default): a money commit whose screen does not show the run's amount and recipient. | `resume(session_id, confirm=True)` after checking a `screenshot`. One confirm covers the rest of the run. |
-| `paused_confirm` | Only with `ask_before_delete = true` (off by default): a destructive control (Delete/Remove/Eliminar/Trash…, named in `control`). | `screenshot`, then `resume(session_id, confirm=True)`. |
-| `error` `money_action_uncertain` | A money tap may or may not have gone through. | Do NOT retry. Check the bank app's movements, then `end_session`. |
-| `error` `target_unreachable` | The driven Chrome or device dropped the connection mid-run (Chrome closed, restarted, or running without its remote-debugging port); `detail.error` has the raw message. | Check `status` -> `chrome.cdp_url`, make sure that Chrome is up, then run again with a new session. |
-| `error` other | Provider/device problem (e.g. HTTP 529 = Jev overloaded; HTTP 422 = the request was rejected, jevd's log has the provider's reason). A screen with more than 255 controls (a whole workflow canvas after Fit to Screen) is trimmed before it reaches Jev, controls named in the goal first: name the control you want. | Retry once after a few seconds. |
+| `done` | Goal done; confirmed by an independent check of the final screen, or by the runner itself when it made every click the goal named. Read-only goals are never second-guessed. | Next step. |
+| `unverified` | The check disagreed (`reason`). `tap_changed_nothing`: the named control was tapped and the screen stayed the same (re-read once). | Not done. On `tap_changed_nothing` name a different control of that card or row (its text, its icon) or scroll it fully into view; `detail.sample` lists what was on offer. |
+| `blocked` / `jev_blocked` | The model found nothing to do towards the goal. `detail.why: blank_page` = nothing rendered (the URL is almost always wrong); `no_controls` = nothing clickable reached the model (a canvas or unreadable frame). Controls present but a high BLOCKED weight = the goal did not name a control on that screen. | Name the control as the app shows it (quote it), fix the URL, or report with `detail`. |
+| `blocked` / `no_progress` | Three taps left the screen unchanged. | Name a different control; the ones in `detail.tried` do nothing there. |
+| `blocked` / `control_disabled` | The named control is greyed out (`detail.control`). | Don't retry; change what governs it or report it. |
+| `blocked` / `signed_out` (chrome) | The page redirected to a sign-in screen. | Ask Eduardo to sign in in that Chrome window, then run again. |
+| `blocked` / `screen_unreadable` | Right after opening an app, usually. | Wait 3 s, run again with the same `session_id`. |
+| `blocked` / `stuck_in_loop` | The same tap on the same screen, repeatedly. | Make the goal name the exact target. |
+| `blocked` / `text_model_unavailable` | The provider that produces typed values failed (`detail.text_model`). | Put the exact text in the goal (`type 'Round Robin'`). |
+| `blocked` / `already_sent` | A second send in one run. | One message per run. |
+| `max_steps` | Step limit hit. | `detail.steps` shows what happened; shorten or sharpen the goal. |
+| `paused_needs_input` | A password/PIN/code field with nothing stored. | Ask Eduardo to type it on the device, then `resume(typed=True)`. Better: store it once with `python -m jev_runner.vault set <host-or-package>` (`set-totp`, `set-user`), then it is typed without any model. Never write the value anywhere. |
+| `error` / `money_action_uncertain` | A money tap may or may not have gone through. | Do NOT retry. Check the app's movements, then `end_session`. |
+| `error` / `target_unreachable` | Chrome or the device dropped mid-run. | `status`, make sure it is up, run again in a new session. |
+| `error` / `stale_page` | Three refused acts in a row: the control kept changing under the read. `verified_after_stale` as `done` means it worked anyway. | Retry once. |
+| `error` other | Provider or device problem (HTTP 529 = overloaded). | Retry once after a few seconds. |
 
-## Only through jev-runner (hard rule)
+`paused_mismatch` and `paused_confirm` exist only with `ask_before_money` / `ask_before_delete`
+set true in jevd's config.toml. They are off: see Money rules.
 
-Never drive the device yourself — no `adb shell input`, no uiautomator2 / `u2` calls
-(`click`, `touch.down`, `resourceIdMatches`, …), no scripts that tap the phone — for anything in
-a banking or payment app, and never for a tap that can move money or send a message.
-Those taps skip every protection: amount/recipient check, one-money-action limit, secret masking,
-receipts and the final-screen check. If jev-runner can't get past a screen, stop and report the
-`session_id`, `reason` and a `screenshot` path; the fix belongs in jev-runner.
-(jev-runner already retries a tap that changed nothing with a short press, which is what web-view
-cards in some bank apps need.)
+## Rules
 
-## Message rules (enforced in code)
+1. **Only through jev-runner.** Never drive the device yourself (`adb shell input`, uiautomator2
+   calls, scripts that tap) for anything in a banking or payment app, or any tap that can move
+   money or send a message. If jev-runner can't get past a screen, stop and report the
+   `session_id`, `reason`, `detail` and the `screen` labels: the fix belongs in jev-runner.
+2. **Money and delete taps never pause.** Eduardo's approval is given once, in jevd's config
+   (`ask_before_money` / `ask_before_delete`, both off). Transferir/Pagar/Delete are tapped like
+   any other control: **do not ask him per step.** Still pass `params={"amount": ..., "recipient":
+   ...}` and `money_params=["amount","recipient"]` for a payment so the receipt records them. A
+   money tap is never retried. One transfer per `run_task` keeps one receipt per transfer.
+3. **One send per run.** The final Send/Enviar is tapped at most once per run and never
+   auto-retried. One message or forward per `run_task`; if it comes back `unverified`, look at
+   `screen` before deciding whether it went.
+4. **Bank login is entered by the human on the device**, by design. Expect: Eduardo types the
+   password and taps Ingresar, then you run the task. Don't try to fill it.
+5. **Leave learning on** (default). Secrets are never stored, values come fresh from `params`.
 
-- **One send per run.** The final send/forward control ("Send", "Enviar") is tapped at most
-  once per run and is never auto-retried, so a forward that returns to a similar-looking screen
-  can't be sent twice. A second send in the same run returns `blocked` / `already_sent`.
-- So: do each message or forward as its own `run_task`. If a send comes back `unverified` or
-  `blocked`, do NOT re-run blindly — `screenshot`, confirm whether it actually went, then decide.
+## Writing goals that work
 
-## Money rules
-
-- Eduardo's approval for money and delete taps is given once, in jevd's config
-  (`ask_before_money` / `ask_before_delete`, both off). jev-runner taps Transferir/Pagar/Delete
-  like any other control: **no run pauses for a confirm, so do not ask him per step.**
-- Still pass `params={"amount": <number>, "recipient": "<IBAN or account>"}` and
-  `money_params=["amount","recipient"]` for a payment: the receipt and the run record carry them.
-- A money tap is never retried by the runner. If a run ends `error` / `money_action_uncertain`,
-  do not re-run: check the app's movements, then `end_session`.
-- One transfer per `run_task` keeps the receipt per transfer.
-
-## Writing goals that work (learned on the real tablet)
-
-- Put every value to type **in the goal text, exactly** (the text model never invents values):
-  "type exactly: float marybel".
-- Name people and chats **exactly as saved in the app** and add "if no chat with exactly that
-  name appears, stop". (A goal saying only "Eduardo" once messaged the wrong person.)
-- Say what not to tap when an app has traps: "Never tap Ask or Meta AI".
-- Small goals, one screen-level task each, reusing the `session_id`: log in → open transfer →
-  fill → confirm → share receipt. Check `screenshot` between them when money is involved.
-- Banking sessions expire fast (BAC: ~8 minutes). Log in and go straight to the transfer.
-- **Bank login is entered by the human on the device, by design** — jev-runner does not auto-log-in
-  (the password is never delivered to the daemon). Expect: human types Contraseña on the Pad and taps
-  Ingresar, then you run the transfer. Don't try to fill the login password or look for a "login skill".
-- **Leave learning ON (it is the default).** Money runs are safe to learn: a replayed fill pulls
-  this run's value fresh from `params` (`param:amount`), a stale recorded number is auto-rejected,
-  secrets are never stored (always re-prompted), and every guard (amount+recipient match, the
-  one-money-action limit) runs again on replay. Don't pass `learn=False`. Use `save_as` to name a
-  flow you want to replay by name, and pass `flow=<name>` next time to reuse it.
-- **Controls inside a cross-origin iframe are actionable** (e.g. GHL's automation UI): they appear
-  as normal actions and `run_task` can click, fill, and scroll them — no special syntax. The runner
-  waits for the iframe to finish mounting on its own (a "wait" now settles until the page stops
-  changing), and scrolling is routed into the iframe, so rows below its fold are reachable. Only the
-  tab whose page is being driven is used, even if other tabs show the same page. Validated end to end
-  on GHL (open a workflow from the list). A *money* button inside an iframe will **pause for approval**
-  (the amount/recipient check reads the top-frame text, which can't see iframe amounts) — that's the
-  safe default, not a failure. Note: a goal that only *navigates* ("open X") can still finish
-  `blocked` even though it worked, because Jev doesn't always recognise the new screen as "done";
-  `screenshot`/`read` to confirm, or phrase the goal around a visible end state.
-- **A modal or promo popover blocks everything** — Jev returns `blocked` because it can't read or
-  scroll under an overlay. Even on a read-only tour, allow dismissing it: add "first dismiss any
-  popover with Not now / Close / Skip / Dismiss / Got it / the X, then …". Dismissing a promo or
-  cookie banner is not a data change. (Don't accept anything that submits a form or changes records.)
+- **Several steps per goal, not one tap per run.** The runner handles on its own: a quoted label
+  after a click verb (`click 'Unit: minutes'`, in order, once each), a value spelled out for a
+  named field (`type '500' into the Monto field`), `hide the keyboard`, `press Escape`, a
+  canvas node named in the goal (`bring 'WAIT 4 hours' into view, then click it`), a tap that
+  changed nothing (not offered again). One `run_task` per task, several taps inside it.
+- **Quote labels exactly as the app shows them.** Same-named controls carry their row:
+  `Domain Options — <card's first line>`, `switch — Dashboard`, `user row edit — <person>`. Two
+  cards with the same title are numbered: `... — 20` and `... — 20 (2)`.
+- **Say what not to tap** (`Do not click Delete or Publish`): those controls are never shown to
+  the model. After every quoted click has happened, a model act on an unnamed control ends the
+  run `done` with `reason` `named_clicks_done`; if that step was wanted, name it.
+- Put every value to type in the goal, exactly. Name people and chats exactly as saved, and add
+  "if no chat with exactly that name appears, stop".
+- A popover blocks everything: allow "first dismiss any popover with Not now / Close / Skip /
+  Got it / the X, then …". Dismissing a promo is not a data change.
+- Banking sessions expire fast (BAC: ~8 minutes): go straight to the task.
+- Controls inside cross-origin iframes (GHL's automation UI) are normal actions. A list that
+  scrolls inside the page gets `Scroll the list down/up`; a canvas gets `Pan the canvas ...` and
+  `Bring <title> into view`. Don't ask for Fit to Screen on a canvas.
+- Known GHL routes that render blank: `/settings/team` (use `/settings/users`) and the plural
+  `/automation/workflows/<id>` (the editor is `/automation/workflow/<id>`).

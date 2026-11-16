@@ -34,7 +34,7 @@ keys). Set the keys, then restart `jevd` so it picks them up.
 Files: `run_task(target="chrome", files=[...])` uploads through the page's file inputs without the
 OS picker; a chrome result lists new `downloads`. Allowed local folders: `outbox/`, `~/Downloads`,
 `~/Desktop`, `~/Documents` (override with `file_roots`); hidden/secret-looking files are refused.
-See [`docs/AGENT-GUIDE.md`](docs/AGENT-GUIDE.md#moving-files).
+See [`docs/SETUP.md`](docs/SETUP.md#moving-files).
 
 Usage rules: one `run_task` call per goal. Statuses: `paused_needs_input` means ask the user
 and call `resume(input=...)`; `error` with reason `money_action_uncertain` is terminal -- have
@@ -48,7 +48,7 @@ config.toml they pause instead (`paused_mismatch` / `paused_confirm`) for `resum
 lock, so a second Android run while one is paused/running gets `device_busy`. Any other
 value fails with `unknown_device: <value>`.
 
-Agents driving jev-runner: read [`docs/AGENT-GUIDE.md`](docs/AGENT-GUIDE.md).
+Agents driving jev-runner: read [`docs/AGENT-GUIDE.md`](docs/AGENT-GUIDE.md) (short). Install, Chrome binding and the runner reference: [`docs/SETUP.md`](docs/SETUP.md).
 
 ## Setup
 
