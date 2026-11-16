@@ -28,6 +28,11 @@ HINTS = {
                                "clicking alone. Put the exact text to type in the goal (\"type 'Round "
                                "Robin'\": a spelled-out value never needs the text model), or have the "
                                "text model's account fixed. Decisions use the main model and still work."),
+    "tap_changed_nothing": ("The control the goal named was tapped and the screen did not change: the "
+                            "tap did not take (the element's box may not be where it is drawn, or it "
+                            "is not the clickable part). Don't call it done. `screenshot`, then name "
+                            "a different control on that card or row (its text, its icon), or scroll "
+                            "it fully into view first."),
     "control_disabled": ("The control the goal names is on screen but the app has disabled it (greyed out, "
                          "aria-disabled): a click would do nothing. Don't retry the same click; `read` the "
                          "screen (a disabled toggle shows `(disabled)` on the States line), report what the "
@@ -54,7 +59,7 @@ def build(runner) -> dict:
     if runner.reason == "stale_page" and getattr(runner, "last_stale", None):
         out["detail"] = runner.last_stale  # which action was refused and why (for bug reports)
     if (runner.reason in ("jev_blocked", "no_progress", "control_disabled", "named_clicks_done",
-                          "text_model_unavailable")
+                          "text_model_unavailable", "tap_changed_nothing")
             or runner.status == "unverified") \
             and getattr(runner, "last_blocked", None):
         out["detail"] = runner.last_blocked  # what Jev saw when it gave up or called done

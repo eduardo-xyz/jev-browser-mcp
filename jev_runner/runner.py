@@ -1212,11 +1212,24 @@ class Runner:
                 # The runner itself did every click the goal named and ended the run: that is the
                 # goal, by construction. Seen: "Click 'Transferir' once. Nothing else." came back
                 # "unverified: not a completed transfer" from the text model and was retried.
+                # Unless the named tap changed nothing on screen: then the click did not take
+                # (seen: an account card tapped, Inicio unchanged, reported done; the agent went
+                # on believing the account was open), and the run says so.
+                if self._last_tap_dead():
+                    self.last_blocked = self._blocked_detail(decision, page)
+                    self.last_blocked["tried"] = [self.history[-1].get("action")]
+                    raise _Stop("unverified", "tap_changed_nothing")
                 self.verified, self._verify_reason = True, "runner_named"
                 raise _Stop("done", decision.get("reason"))
-            if self._check(page) is False:
+            checked = self._check(page)
+            if checked is False:
                 self.last_blocked = self._blocked_detail(decision, page)  # what Jev called done
                 raise _Stop("unverified", self._verify_reason or "goal_not_visible")
+            if checked is not True and self._last_tap_dead():
+                # nothing independently confirmed the goal, and the run's last tap changed nothing
+                self.last_blocked = self._blocked_detail(decision, page)
+                self.last_blocked["tried"] = [self.history[-1].get("action")]
+                raise _Stop("unverified", "tap_changed_nothing")
             raise _Stop("done", decision.get("reason"))
         if choice == "BLOCKED":
             if self._check(page) is True:  # Jev gave up, but the goal is visibly met
@@ -1234,6 +1247,22 @@ class Runner:
             raise _Stop("blocked", "stuck_in_loop")
         self._jev_steps += 1
         self._dispatch(action, page, lambda: self._model_text(action, page))
+
+    def _last_tap_dead(self) -> bool:
+        """The run's last action was a click that left the screen unchanged: the tap did not take.
+        A slow screen gets one more read first: if it has moved since, the tap took after all."""
+        last = self.history[-1] if self.history else None
+        if not (last and last.get("kind") == "click" and last.get("page_changed") is False):
+            return False
+        try:
+            now = self._read()
+        except StalePage:
+            return False  # churning: something is happening
+        if now.get("fingerprint") != (self.page or {}).get("fingerprint"):
+            self.page = now
+            last["page_changed"] = True
+            return False
+        return True
 
     def _dead_locators(self, page: dict) -> set:
         """Locators of taps and scrolls already made on this exact screen that left it unchanged:

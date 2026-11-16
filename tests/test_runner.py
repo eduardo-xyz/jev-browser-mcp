@@ -1049,3 +1049,33 @@ def test_the_result_carries_the_final_screen_so_no_read_is_needed_after_a_run(cf
     out = Runner("s1", t, "go to step two", None, cfg, choose=scripted_choose(["n1", "DONE"])).run()
     assert out["screen"] == {"text": "Step two", "controls": ["Finish", "Name"]}
     assert "s3cret" not in json.dumps(out)
+
+
+def test_a_named_click_that_changed_nothing_is_not_reported_done(cfg):
+    # seen: "Click 'CR - Savings CRC' once" tapped the card's text, Inicio stayed, the run said
+    # done, and the agent carried on as if the account were open
+    screen = page(click("c", "CR - Savings CRC"), click("o", "Other"), text="Inicio\nCuentas")
+    t = FakeTarget([screen, screen, screen], stuck_ids={"c"})
+    out = Runner("s1", t, "Click 'CR - Savings CRC' once only. Stop after that click.", None, cfg,
+                 choose=scripted_choose(["DONE"])).run()
+    assert [a for a, _ in t.acted] == ["c"]
+    assert out["status"] == "unverified" and out["reason"] == "tap_changed_nothing"
+    assert out["detail"]["tried"] == ["CR - Savings CRC"] and "did not take" in out["hint"]
+
+
+def test_a_slow_screen_after_the_last_tap_is_read_once_more_before_the_tap_is_called_dead(cfg):
+    screen = page(click("c", "Open"), text="List")
+    opened = page(click("x", "Close"), text="Detail")
+    t = FakeTarget([screen, screen, opened], stuck_ids={"c"}, advance_on_observe=0)
+    class Slow(type(t)):
+        pass
+    calls = {"n": 0}
+    orig = t.observe
+    def observe():
+        calls["n"] += 1
+        if calls["n"] >= 3:   # the detail arrives on the third read, after the tap's own re-read
+            t.i = 2
+        return orig()
+    t.observe = observe
+    out = Runner("s1", t, "Click 'Open' once only.", None, cfg, choose=scripted_choose(["DONE"])).run()
+    assert out["status"] == "done" and out["screen"]["text"] == "Detail"

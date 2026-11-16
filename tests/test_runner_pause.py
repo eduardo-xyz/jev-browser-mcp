@@ -555,7 +555,7 @@ def test_password_fill_on_unchanging_screen_is_not_no_progress(cfg):
     # login screen: tapping the field and typing a (blanked) password leave the screen identical
     login = page(click("n0", "Contraseña"), fill("n1", "Contraseña · txtPassword", rid="txtPassword"),
                  click("n2", "Ingresar"))
-    t = FakeTarget([login, login, login, page()], stuck_ids={"n0", "n1"})
+    t = FakeTarget([login, page(text="Inicio")], stuck_ids={"n0", "n1"})   # Ingresar opens Inicio
     r = Runner("s", t, "log in", None, cfg, choose=scripted_choose(["n0", "n1", "n2", "DONE"]), learn=False)
     out = r.run()
     assert out["status"] == "paused_needs_input"
