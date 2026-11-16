@@ -1011,3 +1011,32 @@ def test_a_max_steps_run_logs_the_steps_it_took(cfg, caplog):
     assert out["status"] == "max_steps"
     line = next(r.getMessage() for r in caplog.records if "gave up" in r.getMessage())
     assert '"steps": ["Wait", "Wait", "Save action"]' in line
+
+
+def test_a_tap_that_changed_nothing_is_not_offered_again_on_that_screen(cfg):
+    # seen: "Movimientos", "Procesados", "Preregistros" each tapped three times on one screen (a
+    # tab already selected) before the no_progress stop; 16 such runs in a day
+    seen = []
+    def choose(view, goal, history):
+        seen.append([a["id"] for a in view["actions"] if a.get("kind") == "click"])
+        pick = "t1" if "t1" in seen[-1] else "t2" if "t2" in seen[-1] else "DONE"
+        return {"choice": pick, "operation": pick}
+    screen = page(click("t1", "Movimientos"), click("t2", "Procesados"), text="x" * 50)
+    t = FakeTarget([screen, page(click("ok", "Row"), text="y" * 50), page()], stuck_ids={"t1"})
+    out = Runner("s1", t, "Open the Procesados tab.", None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted][:2] == ["t1", "t2"]   # the dead tap once, then the other tab
+    assert seen[1] == ["t2"] and out["status"] in ("done", "unverified", "blocked")
+    assert out.get("reason") != "no_progress"
+
+
+def test_after_a_dead_tap_the_model_sees_only_wait_and_may_stop(cfg):
+    seen = []
+    def choose(view, goal, history):
+        seen.append([a["kind"] for a in view["actions"]])
+        pick = "t1" if any(a["id"] == "t1" for a in view["actions"]) else "BLOCKED"
+        return {"choice": pick, "operation": pick}
+    screen = page(click("t1", "Saldo"), text="x" * 50)
+    t = FakeTarget([screen, screen, screen, screen], stuck_ids={"t1"})
+    out = Runner("s1", t, "Tap Saldo.", None, cfg, choose=choose).run()
+    assert [a for a, _ in t.acted] == ["t1"] and "click" not in seen[1]   # one tap, then it is gone
+    assert out["status"] == "blocked" and out["reason"] != "no_progress"

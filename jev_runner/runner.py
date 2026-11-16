@@ -604,6 +604,15 @@ class Runner:
             decision = None
         else:
             view = scrub(page, self.secrets)
+            dead = self._dead_locators(page)
+            if dead:
+                # a tap on this screen that changed nothing is not offered again: the model
+                # re-tapped the same selected tab or inert label three times, 16 runs in a day
+                kept = [a for a in view["actions"] if tuple(sorted(locator_of(a).items())) not in dead]
+                gone = [a.get("label") for a in view["actions"] if a not in kept]
+                _log.info("session=%s %d control(s) tapped here without change kept from the model: %s",
+                          self.session_id, len(gone), gone[:5])
+                view = {**view, "actions": kept}  # wait, scroll or BLOCKED remain; _no_progress backstops
             looped = self._looped_locators(page)
             if looped:
                 self.loop_events += 1
@@ -802,7 +811,7 @@ class Runner:
             return None
         norm = lambda text: " ".join((text or "").split()).casefold()
         on_screen = set()
-        for a in view["actions"]:
+        for a in view["actions"] + ((self.page or {}).get("actions") or []):  # a control kept from the view is still on screen
             if a.get("kind") in ("click", "fill", "select"):
                 on_screen.add(norm(a.get("raw_label") or (a.get("label") or "").split(" — ")[0]))
                 on_screen.add(norm(a.get("label")))  # a toggle's synthetic "switch — <row>" is its name too
@@ -879,8 +888,8 @@ class Runner:
             # model's "no supported operation can progress" is the end, not a failure (seen: a card
             # clicked and its panel open, reported blocked)
             return bool(quoted) and quoted <= done
-        act = next((a for a in view.get("actions") or []
-                    if a.get("id") == choice and a.get("kind") == "click"), None)
+        act = next((a for a in (view.get("actions") or []) + ((self.page or {}).get("actions") or [])
+                    if a.get("id") == choice and a.get("kind") == "click"), None)  # a control kept from the view still counts
         if act is None:
             return False
         labels = {norm(act.get("label")), norm(act.get("raw_label"))} - {""}
@@ -958,8 +967,8 @@ class Runner:
         done |= {short for short, full in self._quoted_as.items() if full in done}
         if not quoted <= done:
             return None
-        act = next((a for a in view.get("actions") or [] if a.get("id") == decision.get("choice")
-                    and a.get("kind") in ("click", "fill", "select")), None)
+        act = next((a for a in (view.get("actions") or []) + ((self.page or {}).get("actions") or [])
+                    if a.get("id") == decision.get("choice") and a.get("kind") in ("click", "fill", "select")), None)
         if act is None:
             return None
         clean = norm(_NEG_CLAUSE.sub(" ", goal))  # mentions inside a ruled-out clause do not count
@@ -1213,6 +1222,19 @@ class Runner:
             raise _Stop("blocked", "stuck_in_loop")
         self._jev_steps += 1
         self._dispatch(action, page, lambda: self._model_text(action, page))
+
+    def _dead_locators(self, page: dict) -> set:
+        """Locators of taps and scrolls already made on this exact screen that left it unchanged:
+        a selected tab tapped again, a label that is not a button, a list at its end. Dropped from
+        the next view so the model picks something else; a slow screen is not caught here, since
+        its next read is a different screen and the tap counts only on the one it was made on."""
+        fp = page.get("fingerprint")
+        if fp is None:
+            return set()
+        coarse = coarse_fingerprint(page)
+        return {tuple(sorted((h.get("locator") or {}).items())) for h in self.history
+                if h.get("page_changed") is False and h.get("kind") in ("click", "scroll")
+                and h.get("locator") and _same_screen(h, fp, coarse)}
 
     def _looped_locators(self, page: dict) -> set:
         """Locators of real actions already taken LOOP_DROP times on this exact screen — dropped
