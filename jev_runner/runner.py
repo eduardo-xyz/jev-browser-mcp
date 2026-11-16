@@ -284,7 +284,8 @@ class Runner:
         self.pending: dict | None = None
         self.last_used = time.time()
         self.executed_money = False  # never reset once True: the receipt must survive
-        self.money_attempted = False  # one autonomous money action per run; never reset
+        self.money_attempted = False  # a money tap happened in this run (receipts); never reset
+        self.money_confirmed = False  # the person confirmed once: the rest of this run never asks again
         self.sent_attempted = False  # one message/forward send per run; never reset
         self.destructive_attempted = False  # a confirmed delete happened in this run; never reset
         self._money_uncertain = False  # terminal: the session must be ended
@@ -461,18 +462,10 @@ class Runner:
                 raise _Stop("paused_confirm", "screen_changed")
             self.pending = None
             return
+        # The person's confirm covers the rest of this run: the control is still there (found
+        # above), so a toast or a scrolled list since their screenshot does not ask again.
+        self.money_confirmed = True
         try:
-            if not _amount_seen(self._money_text(page)):
-                # A strong-label tap on a screen with no amount only navigates (e.g. a bank's
-                # account-page "Transferir" that opens the form): not a money action, so it must
-                # not spend the one-money-action budget or save a receipt.
-                self._execute(action, page, None, verify=True)
-                self.pending = None
-                return
-            if not (same_screen and self._text_hash(page) == pending["text_hash"]):
-                # Screen changed since the human looked at it: their confirm no longer applies.
-                self._guard_money(action, page, self._money_params())
-                return
             self._execute(action, page, None, verify=True, money=True)
         except StalePage:
             # The target refused before tapping: nothing moved; keep waiting for a confirm.
@@ -1134,11 +1127,23 @@ class Runner:
         return {k: v for k, v in (self.params or {}).items() if k in keys}
 
     def _guard_money(self, action: dict, page: dict, money_params: dict):
-        """Tap autonomously only on an exact on-screen match; otherwise pause."""
+        """Ask once per run. An exact on-screen match taps on its own; a tile that only opens the
+        form taps on its own; after one confirm in this run nothing asks again. Otherwise pause,
+        once. Seen: a bank flow stopped at the account's Transferir tile, at the review, and
+        again after a confirm whose screen had gained a toast; the owner finished by hand."""
+        if self.money_confirmed:
+            self._execute(action, page, None, verify=True, money=True)
+            return
         text = self._money_text(page)
         check = check_money(text, money_params, self.cfg.own_accounts)
-        if money_params and check.ok and not self.money_attempted:
+        if money_params and check.ok:
             self._execute(action, page, None, verify=True, money=True)
+            return
+        if action.get("caption_label") or not _amount_seen(text):
+            # An icon tile named by the caption under it (an account's "Transferir"), or a
+            # strong label on a screen with no amount at all: it opens the form, it cannot
+            # commit. Not a money tap: no receipt, no budget.
+            self._execute(action, page, None, verify=True)
             return
         page, action = self._settled(page, action)  # the human must confirm a screen that holds still
         text = self._money_text(page)
@@ -1147,12 +1152,7 @@ class Runner:
             "money", action, page, text_hash=self._text_hash(page),
             expected=scrub_value(check.expected, self.secrets),
             seen=scrub_value(check.seen, self.secrets))
-        if self.money_attempted:
-            raise _Stop("paused_mismatch", "money_already_attempted")
-        # An icon tile named by the caption under it ("Transferir" on an account's detail) opens
-        # the form; the commit button on the review is a real button. The pause stands (the
-        # label alone cannot prove which), but the reason says what confirming does.
-        raise _Stop("paused_mismatch", "launcher_tile" if action.get("caption_label") else None)
+        raise _Stop("paused_mismatch")
 
     def _guard_destructive(self, action: dict, page: dict):
         """Never delete on Jev's say-so: pause on a settled screen for resume(confirm=True).

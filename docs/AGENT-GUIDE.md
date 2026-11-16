@@ -202,7 +202,7 @@ Every result carries `timing` (ms per phase: `setup_ms` connect/launch or tab op
 | `blocked` / `text_model_unavailable` | The text model that produces typed values (a separate provider from the decision model) failed, e.g. HTTP 402 = its account has no balance (`detail.text_model`). The runner gives up that fill, keeps going by clicking, and reports this only when clicking alone could not reach the goal. | Put the exact text in the goal (`type 'Round Robin'`): a spelled-out value never needs the text model. Otherwise ask Eduardo to fix that provider's account. Decisions still work. |
 | `error` / `stale_page` | Three times in a row the chosen control had changed or was covered between the read and the act. `detail` says which action was refused and why; include it when reporting. If an earlier action had landed and the goal is visibly met on a fresh read, the run ends `done` with reason `verified_after_stale` instead (a Save whose modal closed and page churned). | `signed_out` (Chrome): the page redirected to a sign-in screen (account chooser, password, 2FA). Don't retry and don't try another tool: ask Eduardo to sign in in that Chrome window, then run again. A goal that itself asks to sign in is not stopped. `screen_unreadable` right after opening an app: wait 3 s and run again with the same `session_id`. `missing_value`: put the exact text in the goal. `stuck_in_loop`: Jev kept repeating the same tap on the same screen (e.g. opening the wrong account, going back, opening it again) — don't just retry; make the goal name the exact target ("open the account ending 0743", "tap exactly …") or `screenshot` to see where it's stuck. |
 | `paused_needs_input` | A password/PIN/code field (`field`) with nothing stored for that site/app. | **Preferred:** ask Eduardo to type it on the device / in the tab himself, then `resume(session_id, typed=True)`: the value never passes through the chat or your transcript. Better still, have it stored once (`python -m jev_runner.vault set <host-or-package>`, `set-totp` for authenticator codes, `set-user` for the email/username, which is then typed on that site's sign-in page — and on the identity provider it redirects to — without any model): jevd then types it before ever pausing, and you never see it. Last resort: `resume(session_id, input=<value>)`; never write the value anywhere else. |
-| `paused_mismatch` | A money button, and the amount/recipient did not both match the screen (`expected` vs `seen`), or a second money action in one run (`reason` `money_already_attempted`). `reason` `launcher_tile`: the control is an icon tile named by its caption (an account's Transferir tile) on a screen without this transfer's amount: it opens the form, it does not commit. | Check `expected`/`seen` and a `screenshot`. Approve with `resume(session_id, confirm=True)` only if it is exactly the intended payment. On `launcher_tile`, confirm once the screenshot shows that launcher screen: the tap opens the form, and the review's commit button pauses again on its own. |
+| `paused_mismatch` | A money commit button whose screen does not show the run's amount and recipient (`expected` vs `seen`). Asked once per run: after `resume(confirm=True)` nothing else in that run pauses. A tile or a screen with no amount at all opens the form without asking. | Check `expected`/`seen` and a `screenshot`. Approve with `resume(session_id, confirm=True)` only if it is exactly the intended payment. |
 | `paused_confirm` | A destructive control (Delete/Remove/Eliminar/Trash…, named in `control`). Every such click pauses; `reason` is `destructive_action`, or `destructive_already_attempted` if this run already deleted something (a row-menu Delete plus its dialog's Delete is two confirms). | `screenshot` and check it is exactly the record to delete. Approve with `resume(session_id, confirm=True)` only with the human's OK. If the screen changed meanwhile it re-pauses instead of clicking. |
 | `error` `money_action_uncertain` | A money tap may or may not have gone through. | Do NOT retry. Check the bank app's movements, then `end_session`. |
 | `error` `target_unreachable` | The driven Chrome or device dropped the connection mid-run (Chrome closed, restarted, or running without its remote-debugging port); `detail.error` has the raw message. | Check `status` -> `chrome.cdp_url`, make sure that Chrome is up, then run again with a new session. |
@@ -232,17 +232,12 @@ cards in some bank apps need.)
 - For any payment pass `params={"amount": <number>, "recipient": "<IBAN or account>"}` and
   `money_params=["amount","recipient"]`. jev-runner taps the final Transferir/Pagar on its own
   **only** if both match what the screen shows; otherwise it pauses.
-- One money action per run. Do each transfer as its own `run_task`.
-- Opening the transfer flow from an account's **Transferir tile** pauses too (`reason`
-  `launcher_tile`): the label is the same as the commit button's, so the runner cannot tell them
-  apart. Confirm that pause when the screenshot shows the launcher screen (no amount for this
-  transfer on it); the commit button later pauses on its own, so nothing is approved twice.
-  Labels that only ever open a menu (e.g. "Transferir o pagar") go in `navigation_labels` in
-  jevd's config.toml and are never guarded; "Transferir" itself cannot go there, since the commit
-  button carries it too.
-- Eduardo has authorised Smart-Bot to approve `paused_mismatch` itself. Approve only when
-  `expected` matches the intended transfer and the screenshot shows the right accounts.
-  That authorisation does **not** cover `paused_confirm` (deletes): those need the human.
+- Asked **once per run**: a transfer's tile and any screen without an amount open on their own;
+  the commit button taps on its own when amount and recipient match the screen, and pauses once
+  when they do not. After `resume(confirm=True)` the rest of that run never asks again, so put
+  one transfer per `run_task` and the whole thing is at most one question.
+- Labels that only ever open a menu (e.g. "Transferir o pagar") can go in `navigation_labels` in
+  jevd's config.toml; "Transferir" itself cannot, since the commit button carries it too.
 
 ## Writing goals that work (learned on the real tablet)
 

@@ -65,3 +65,13 @@ note is jev-runner's side. No account numbers, amounts or names are recorded her
   exist only in the agent's result.
 - **Q8** Out of the runner's hands: `screenshot` returns the current screen; a stale file is an
   operator-side mix-up. The runner's own verify reads the live screen, never a file.
+
+## Follow-up, 16 Nov: ask once per run
+
+Eduardo's decision after reading this: the pauses were acting as hard blockers. The money guard
+now asks once per run. A caption-named tile, or any money label on a screen with no amount at
+all, opens the form without asking; a commit whose screen matches the run's amount and recipient
+taps on its own; a commit whose screen does not match pauses once; after that `resume(confirm=True)`
+the rest of the run never asks again, including a second money tap and a screen that changed
+since the screenshot (the control must still be there). The `launcher_tile` reason and the
+`money_already_attempted` re-pause are gone. Deletes still pause every time.
